@@ -1,0 +1,35 @@
+# Pinned upstream revisions for reproducing reports/world_models_report.tex.
+#
+# WHY: a fresh clone otherwise tracks each upstream `main`, so report numbers can
+# silently drift when upstream moves. These SHAs pin the exact upstream state a
+# fresh clone uses for reproduction.
+#
+# PROVENANCE: the SHAs below are the upstream `main` HEADs resolved on the report
+# date (2026-06-16) -- the revision the report runs used. The exact per-run SHA is
+# also recorded at run time in the Google Drive run-metadata archives
+# (scripts/r2dreamer/archive_run_metadata.py -> "r2dreamer_git_commit";
+# scripts/dino_wm/setup_dino_wm.sh -> "dino_wm_commit"); if one differs, prefer it.
+#
+# HOW SETUP HONORS THIS (locked SHA is the default; env override is for dev):
+#   - DINO-WM:    setup_dino_wm.sh defaults DINO_WM_COMMIT to dino_wm.commit below
+#                 (read via scripts/read_lock.py); export DINO_WM_COMMIT to override.
+#   - R2-Dreamer: configs/r2dreamer/*.yaml `r2dreamer.commit` carry the same SHA
+#                 and are passed to setup_r2dreamer.sh --commit.
+
+r2dreamer:
+  repo: https://github.com/NM512/r2dreamer.git
+  commit: 546e4fab8146ea4b14e1d7726bbc1a8a1d50322f
+  pinned: true
+  used_for: Track I R2-Dreamer experiments (DMC vision walker_walk -> walker_run)
+
+dino_wm:
+  repo: https://github.com/gaoyuezhou/dino_wm.git
+  commit: 0a9492fa12044b852ae9e001cc74604b79c8bb0c
+  pinned: true
+  used_for: Tracks II-III DINO-WM PointMaze (reproduction, low-data adaptation, local/global)
+
+jepa_wms_optional:
+  repo: https://github.com/facebookresearch/jepa-wms.git
+  commit: 13cf1d9c7e476f53c17714d2e0f1dc239a883ce0
+  pinned: true
+  used_for: optional reference only -- NOT used to produce any report number

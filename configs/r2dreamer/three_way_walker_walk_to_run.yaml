@@ -1,0 +1,57 @@
+experiment_name: walker_walk_to_run_t4_r2_proprio_12m
+
+r2dreamer:
+  repo_env_var: R2DREAMER_REPO
+  remote: https://github.com/NM512/r2dreamer.git
+  commit: 546e4fab8146ea4b14e1d7726bbc1a8a1d50322f  # pinned; see external_revisions.lock (r2dreamer)
+  extras: dmc
+
+paths:
+  log_root_env_var: R2_LOG_ROOT
+  figure_dir_env_var: R2_FIGURE_DIR
+
+algorithm:
+  rep_loss: r2dreamer
+  model: size12M
+
+build_scale:
+  tier: t4_balanced
+  intended_gpu: T4
+  notes: "Canonical default. Equivalent to three_way_walker_walk_to_run_t4_r2_proprio.yaml."
+
+environment:
+  env: dmc_proprio
+  source_task: dmc_walker_walk
+  target_task: dmc_walker_run
+  disable_image_render: true
+
+training:
+  seed: 0
+  source_steps: 510000
+  target_steps: 250000
+  batch_size: 16
+  batch_length: 64
+  train_ratio: 64
+  env_num: 4
+  eval_every: 25000
+  eval_episodes: 5
+  save_eval_checkpoints: true
+  checkpoint_keep: 8
+  progress_every: 100
+
+finetuning:
+  pretrained_strict: true
+  load_optimizer: false
+
+smoke:
+  steps: 2000
+  batch_size: 4
+  batch_length: 16
+  train_ratio: 4
+  env_num: 1
+  eval_every: 1000
+  eval_episodes: 0
+  checkpoint_every: 0
+  checkpoint_keep: 1
+  progress_every: 100
+  compile: false

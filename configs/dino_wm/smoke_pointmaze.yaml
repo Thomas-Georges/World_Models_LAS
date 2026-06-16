@@ -1,0 +1,24 @@
+extends: base.yaml
+run_name: smoke_pointmaze_seed0
+dataset:
+  env: point_maze
+  max_train_trajectories: 16
+  max_val_trajectories: 4
+training:
+  seed: 0
+  epochs: 1
+  batch_size: 4
+  max_wall_minutes: 20
+planning:
+  enabled: true
+  n_evals: 2
+  opt_steps: 2
+  samples: 8
+  max_wall_minutes: 10
+# Smoke validates the online encoding path end to end; it must not depend on a
+# precomputed latent cache.
+features:
+  cache_enabled: false
+metadata:
+  tags:
+    - smoke

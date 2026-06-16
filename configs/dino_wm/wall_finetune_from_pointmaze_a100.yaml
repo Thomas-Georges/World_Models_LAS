@@ -1,0 +1,22 @@
+extends: base.yaml
+run_name: wall_finetune_from_pointmaze_a100_seed0
+dataset:
+  env: wall_single
+  max_train_trajectories: 300
+  max_val_trajectories: 60
+finetuning:
+  enabled: true
+  init_from: ${oc.env:DINO_POINTMAZE_SOURCE_CKPT,null}
+  epochs: 20
+  strict: false
+training:
+  seed: 0
+  max_wall_minutes: 90
+planning:
+  n_evals: 50
+  max_wall_minutes: 60
+metadata:
+  tags:
+    - wall
+    - transfer
+    - finetune

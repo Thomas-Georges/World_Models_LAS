@@ -1,0 +1,24 @@
+experiment_name: smoke_dmc_proprio
+
+algorithm:
+  rep_loss: dreamer
+  model: size12M
+
+environment:
+  env: dmc_proprio
+  task: dmc_walker_walk
+  disable_image_render: true
+
+training:
+  seed: 0
+  steps: 2000
+  batch_size: 4
+  batch_length: 16
+  train_ratio: 4
+  env_num: 1
+  eval_every: 1000
+  eval_episodes: 0
+  checkpoint_every: 0
+  checkpoint_keep: 1
+  progress_every: 100
+  compile: false

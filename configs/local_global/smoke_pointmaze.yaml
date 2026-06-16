@@ -1,0 +1,38 @@
+# Tiny PointMaze smoke. On Colab, point LG_LATENT_CACHE_DIR / LG_ACTION_DATA_DIR
+# at the real cache and data to exercise real latents; the local default writes
+# synthetic latents with the real (196, 384) shapes into a smoke-only directory,
+# which trains the surrogate but cannot run planners (they need the DINO-WM
+# checkpoint) - use smoke_synthetic.yaml for the CPU planner smoke.
+extends: base.yaml
+run_name: smoke_local_global_pointmaze
+device: cpu
+
+paths:
+  run_root: ${oc.env:LG_SMOKE_ROOT,runs/local_global}
+  latent_cache_dir: ${oc.env:LG_LATENT_CACHE_DIR,runs/local_global/_synthetic_pointmaze/latent_cache}
+  action_data_dir: ${oc.env:LG_ACTION_DATA_DIR,runs/local_global/_synthetic_pointmaze/action_data}
+
+training:
+  batch_size: 8
+  max_steps: 10
+  val_every: 5
+  save_every: 5
+  log_every: 1
+  num_workers: 0
+  max_episodes: 2
+  max_windows: 32
+  max_wall_minutes: 10
+
+planning:
+  cem_population: 16
+  cem_elites: 4
+  cem_iters: 2
+  gd_iters: 5
+
+evaluation:
+  num_episodes: 1
+
+smoke:
+  use_synthetic_latents_if_missing: true
+  synthetic_episodes: 2
+  synthetic_episode_length: 64

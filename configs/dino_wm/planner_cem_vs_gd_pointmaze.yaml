@@ -1,0 +1,20 @@
+extends: base.yaml
+run_name: planner_cem_vs_gd_pointmaze_seed0
+dataset:
+  env: point_maze
+training:
+  max_wall_minutes: 1
+planning:
+  enabled: true
+  planner: cem
+  n_evals: 50
+  max_wall_minutes: 60
+planner_ablation:
+  checkpoint: ${oc.env:DINO_POINTMAZE_SOURCE_CKPT,null}
+  planners:
+    - cem
+    - gd
+metadata:
+  tags:
+    - planner_only
+    - pointmaze

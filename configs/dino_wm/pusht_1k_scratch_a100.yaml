@@ -1,0 +1,22 @@
+extends: base.yaml
+run_name: pusht_1k_scratch_a100_seed0
+dataset:
+  env: pusht_noise
+  max_train_trajectories: 1000
+  max_val_trajectories: 100
+model:
+  num_hist: 3
+  frameskip: 5
+  causal_mask: true
+training:
+  seed: 0
+  epochs: 40
+  batch_size: 32
+  max_wall_minutes: 190
+planning:
+  n_evals: 50
+  max_wall_minutes: 60
+metadata:
+  tags:
+    - pusht
+    - scratch

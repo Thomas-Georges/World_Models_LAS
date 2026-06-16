@@ -1,0 +1,35 @@
+extends: base.yaml
+run_name: pointmaze_lowdata_finetune_a100_seed0
+dataset:
+  env: point_maze
+  split_seed: 0
+  max_train_trajectories: 300
+  max_val_trajectories: 60
+training:
+  seed: 0
+  max_wall_minutes: 80
+finetuning:
+  enabled: true
+  init_from: ${oc.env:DINO_POINTMAZE_SOURCE_CKPT,null}
+  epochs: 20
+  predictor_lr: 1.0e-5
+  action_encoder_lr: 1.0e-4
+planning:
+  # 200 evals shrink the success-rate 95% interval to ~±0.065,
+  # making the scratch-vs-finetune comparison statistically solid.
+  n_evals: 200
+  max_wall_minutes: 60
+# Predictor-only like the source checkpoint (the full no-decoder run): the
+# fine-tune never loads or trains the decoder, and latent-cache training has
+# no image targets for one.
+upstream:
+  train_overrides:
+    - has_decoder=false
+    - model.train_decoder=false
+    - ++training.num_reconstruct_samples=0
+metadata:
+  tags:
+    - pointmaze
+    - lowdata
+    - finetune
+    - nodecoder

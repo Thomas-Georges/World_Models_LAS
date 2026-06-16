@@ -1,0 +1,18 @@
+extends: base.yaml
+run_name: pusht_causal_mask_false_a100_seed0
+dataset:
+  env: pusht_noise
+  max_train_trajectories: 500
+  max_val_trajectories: 100
+model:
+  causal_mask: false
+training:
+  epochs: 30
+  max_wall_minutes: 120
+planning:
+  n_evals: 30
+  max_wall_minutes: 45
+metadata:
+  tags:
+    - pusht
+    - causal_mask_false

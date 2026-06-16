@@ -1,0 +1,26 @@
+extends: base.yaml
+run_name: pointmaze_scratch_a100_seed0
+dataset:
+  env: point_maze
+  max_train_trajectories: 2000
+  max_val_trajectories: 200
+model:
+  num_hist: 3
+  frameskip: 5
+training:
+  seed: 0
+  epochs: 60
+  batch_size: 32
+  max_wall_minutes: 160
+planning:
+  n_evals: 50
+  max_wall_minutes: 60
+# This config keeps the upstream decoder (visual reconstruction), which needs
+# image targets, so it must train on the online image path. The no-decoder
+# children re-enable the latent cache explicitly.
+features:
+  cache_enabled: false
+metadata:
+  tags:
+    - pointmaze
+    - scratch

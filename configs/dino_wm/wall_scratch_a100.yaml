@@ -1,0 +1,17 @@
+extends: base.yaml
+run_name: wall_scratch_a100_seed0
+dataset:
+  env: wall_single
+  max_train_trajectories: 1000
+  max_val_trajectories: 100
+training:
+  seed: 0
+  epochs: 50
+  max_wall_minutes: 160
+planning:
+  n_evals: 50
+  max_wall_minutes: 60
+metadata:
+  tags:
+    - wall
+    - scratch

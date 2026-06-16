@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wm-poc"
+version = "0.1.0"
+description = "World models for control across the representation spectrum: R2-Dreamer transfer, DINO-WM reproduction + low-data adaptation, and local/global planning, under a commodity-GPU budget."
+requires-python = ">=3.10"
+# Lightweight runtime deps used by the source modules outside the optional,
+# GPU-heavy tracks (config loading, manifests, plotting helpers). The heavy
+# per-track stacks (torch, hydra, ...) are intentionally not installed by
+# default -- pick the matching extra below. See README "Environments per track".
+dependencies = [
+  "PyYAML",
+  "numpy",
+]
+
+[project.optional-dependencies]
+# Runs the (CPU) test suite, the linter, and the report/figure scripts.
+dev = [
+  "pytest",
+  "ruff",
+  "nbformat",
+  "matplotlib",
+  "pandas",
+]
+# Track I -- R2-Dreamer (DMC vision). Upstream NM512/r2dreamer pulls in its own
+# gym/dmc stack; these are the libraries imported by wm_poc.r2dreamer itself.
+r2dreamer = ["torch", "torchvision", "einops", "tensordict", "matplotlib", "PyYAML", "numpy"]
+# Track II -- DINO-WM (PointMaze) reproduction + low-data adaptation.
+dino = ["torch", "torchvision", "einops", "hydra-core", "omegaconf", "imageio", "matplotlib", "PyYAML", "numpy"]
+# Track III -- local/global planning on the DINO-WM model.
+local-global = ["torch", "matplotlib", "PyYAML", "numpy"]
+# Running the notebooks (01/02/03 training, 06/07/08 results).
+notebooks = ["jupyter", "ipykernel", "nbformat", "ipython", "pandas", "matplotlib"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

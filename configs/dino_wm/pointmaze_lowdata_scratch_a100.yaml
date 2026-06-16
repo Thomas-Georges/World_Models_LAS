@@ -1,0 +1,29 @@
+extends: base.yaml
+run_name: pointmaze_lowdata_scratch_a100_seed0
+dataset:
+  env: point_maze
+  split_seed: 0
+  max_train_trajectories: 300
+  max_val_trajectories: 60
+training:
+  seed: 0
+  epochs: 30
+  max_wall_minutes: 80
+planning:
+  # Matches the fine-tune config so the comparison stays apples-to-apples.
+  n_evals: 200
+  max_wall_minutes: 60
+# Predictor-only, matching the full no-decoder run this baseline is compared
+# against. Also required for latent-cache training: the decoder needs image
+# targets, which the latent dataset does not serve.
+upstream:
+  train_overrides:
+    - has_decoder=false
+    - model.train_decoder=false
+    - ++training.num_reconstruct_samples=0
+metadata:
+  tags:
+    - pointmaze
+    - lowdata
+    - scratch
+    - nodecoder

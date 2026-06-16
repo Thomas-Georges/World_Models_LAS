@@ -1,0 +1,35 @@
+# The full PointMaze local/global experiment, throughput-tuned for an A100.
+# This file DEFINES the experiment (model sizes, planner budgets, episodes);
+# pointmaze_surrogate_t4.yaml extends it and overrides throughput knobs only,
+# so the identical experiment runs (slower) on a T4 and shares this run dir.
+extends: base.yaml
+run_name: pointmaze_local_full_seed0
+
+global_model:
+  rollout_batch_size: 128   # CEM candidates per predictor forward (memory knob)
+
+local_model:
+  projection: grid_pool_linear   # keeps coarse spatial layout; ablate vs mean pool
+  projection_grid: 4
+  local_dim: 256
+  hidden_dim: 512
+  num_layers: 3
+  context_len: 2
+  rollout_steps: 3
+
+training:
+  batch_size: 512
+  max_steps: 20000
+  num_workers: 4
+  max_wall_minutes: 600
+
+evaluation:
+  num_episodes: 100   # ~+-0.10 95% CI on success rate (50 too noisy, 200 ~2x runtime)
+  max_wall_minutes: 600
+  planners:
+    - global_cem
+    - local_cem
+    - local_gd
+    - local_adam
+    - hybrid_cem_local_refine
+    - hybrid_cem_local_refine_global_rescore

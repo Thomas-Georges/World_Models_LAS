@@ -1,0 +1,13 @@
+track,run_name,seed,checkpoint,task,train_steps,eval_episodes,metric_name,metric_value,source_log,source_notebook,notes
+I,source_base,0,random_init,dmc_walker_walk,796000,5,final_eval_return,968.3,drive:source_base/metrics,notebooks/06_r2dreamer_results.ipynb,deterministic 5-episode eval; source task effectively solved
+I,source_base,0,random_init,dmc_walker_walk,796000,5,final_train_return,964.2,drive:source_base/metrics,notebooks/06_r2dreamer_results.ipynb,rolling training return
+I,target_finetune,0,source_base/latest.pt,dmc_walker_run,396000,5,final_eval_return,742.3,drive:target_finetune/metrics,notebooks/06_r2dreamer_results.ipynb,pretrained_strict=true; load_optimizer=false
+I,target_finetune,0,source_base/latest.pt,dmc_walker_run,396000,5,final_train_return,693.4,drive:target_finetune/metrics,notebooks/06_r2dreamer_results.ipynb,
+I,target_scratch,0,random_init,dmc_walker_run,396000,5,final_eval_return,563.1,drive:target_scratch/metrics,notebooks/06_r2dreamer_results.ipynb,"still rising at 400k (sample-efficiency, not asymptote)"
+I,target_scratch,0,random_init,dmc_walker_run,396000,5,final_train_return,529.7,drive:target_scratch/metrics,notebooks/06_r2dreamer_results.ipynb,
+I,target_finetune,0,source_base/latest.pt,dmc_walker_run,0,5,warm_start_eval_return,375,drive:target_finetune/metrics,notebooks/06_r2dreamer_results.ipynb,first eval before run-specific gradient steps (approx 375)
+I,target_scratch,0,random_init,dmc_walker_run,0,5,warm_start_eval_return,25,drive:target_scratch/metrics,notebooks/06_r2dreamer_results.ipynb,random init first eval (approx 25)
+I,target_finetune_vs_scratch,0,,dmc_walker_run,396000,5,final_advantage_return,179.2,derived,notebooks/06_r2dreamer_results.ipynb,742.3 - 563.1 = +179.2 (+32%)
+I,target_finetune_vs_scratch,0,,dmc_walker_run,100000,5,peak_advantage_return,448,derived,notebooks/06_r2dreamer_results.ipynb,peak step-aligned advantage near 100k (approx 448)
+I,target_finetune_vs_scratch,0,,dmc_walker_run,100000,5,midtraining_speedup_x,4.0,derived,notebooks/06_r2dreamer_results.ipynb,approx 600 vs approx 150 at 100k target steps
+I,size25M,0,,,,,trainable_parameters,26529931,drive:extraction_logs,notebooks/06_r2dreamer_results.ipynb,size25M config; checkpoint 325.9 MB (fp32 + Adam moments)

@@ -1,0 +1,20 @@
+extends: base.yaml
+run_name: pointmaze_example_seed0
+dataset:
+  env: point_maze
+  max_train_trajectories: 32
+  max_val_trajectories: 8
+training:
+  epochs: 1
+  batch_size: 4
+  max_wall_minutes: 20
+planning:
+  n_evals: 2
+  opt_steps: 2
+  samples: 8
+  max_wall_minutes: 10
+metadata:
+  notes: "Small example config. Dataset must be downloaded manually before execution."
+  tags:
+    - example
+    - pointmaze

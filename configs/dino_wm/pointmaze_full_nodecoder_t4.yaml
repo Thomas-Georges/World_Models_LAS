@@ -1,0 +1,27 @@
+extends: pointmaze_full_nodecoder_bf16.yaml
+run_name: pointmaze_full_nodecoder_t4_fp16_b32_stride2_seed0
+
+# T4 profile: the latent path is GPU-compute-bound there (~1.3 it/s at batch
+# 32), so the lever that matters is steps per epoch. Consecutive stride-1
+# windows overlap by 19/20 frames; stride 2 halves the window set (~4602 ->
+# ~2301 steps, ~30 min/epoch) with little diversity loss. Launch with
+# DINO_MIXED_PRECISION=fp16 (the notebook cell auto-selects it on T4).
+dataset:
+  slice_stride: 2
+
+# Colab T4 VMs have ~2 vCPUs; more workers just oversubscribe them.
+# T4 steps run ~0.76 s, so a 500-step rolling checkpoint bounds a disconnect
+# to ~6 minutes of lost work.
+training:
+  num_workers: 2
+  save_every_steps: 500
+
+metadata:
+  notes: "T4-budget full-data no-decoder PointMaze run on cached DINO latents; fp16, stride-2 windows."
+  tags:
+    - pointmaze
+    - full-data
+    - nodecoder
+    - fp16
+    - latent-cache
+    - t4

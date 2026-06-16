@@ -1,0 +1,30 @@
+experiment_name: walker_walk_to_run_dmc_proprio_r2dreamer12m
+
+algorithm:
+  rep_loss: r2dreamer
+  model: size12M
+
+build_scale:
+  tier: t4_balanced
+  intended_gpu: T4
+  notes: "R2-Dreamer DMC Proprio 12M T4-balanced preset."
+
+environment:
+  env: dmc_proprio
+  source_task: dmc_walker_walk
+  target_task: dmc_walker_run
+  disable_image_render: true
+
+training:
+  seed: 0
+  source_steps: 510000
+  target_steps: 250000
+  batch_size: 16
+  batch_length: 64
+  train_ratio: 64
+  env_num: 4
+  eval_every: 25000
+  eval_episodes: 5
+  save_eval_checkpoints: true
+  checkpoint_keep: 8
+  progress_every: 100

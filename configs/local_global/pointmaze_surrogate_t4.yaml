@@ -1,0 +1,13 @@
+# The SAME full PointMaze experiment as pointmaze_surrogate_a100.yaml, throttled
+# for a 16 GB T4: only throughput knobs differ (global rollout chunk size,
+# dataloader workers). Model sizes, planner budgets, and episode counts are
+# inherited unchanged, and so is the run name - a run started on one GPU tier
+# continues on the other. Wall-clock caps make slow sessions stop cleanly;
+# re-running the eval resumes the remaining planners.
+extends: pointmaze_surrogate_a100.yaml
+
+global_model:
+  rollout_batch_size: 32
+
+training:
+  num_workers: 2

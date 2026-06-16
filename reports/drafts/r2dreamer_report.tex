@@ -1,0 +1,494 @@
+% R2-Dreamer DMC-Vision walker_walk -> walker_run transfer — experiment report.
+%
+% Figures (reports/figures/r2dreamer_*.png) are the exact committed outputs of
+% notebook 06 (06_r2dreamer_results.ipynb), extracted from its rendered cells.
+%
+% Build: tectonic r2dreamer_report.tex   (or pdflatex, twice)
+
+\documentclass[11pt]{article}
+\usepackage[margin=2.6cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage[colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black, citecolor=blue!50!black]{hyperref}
+\graphicspath{{figures/}}
+\emergencystretch=3em  % absorb residual long-typewriter-token line breaks
+
+\title{Representation-Regularized World Models for Visual Locomotion
+       Transfer:\\ An R2-Dreamer \texttt{walker\_walk}\,$\rightarrow$\,\texttt{walker\_run}
+       Study on DMC Vision}
+\author{Thomas Georges\thanks{Engineering and experiment automation developed
+        with Claude (Anthropic) in the \texttt{wm-prediction} repository.}}
+\date{June 16, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We study transfer in a reconstruction-free, representation-regularized
+DreamerV3 variant (``R2-Dreamer''~\cite{r2dreamer,dreamerv3}) on the DeepMind
+Control Suite~\cite{dmc} from pixels. A 25M-parameter world model is trained on
+\texttt{walker\_walk} and then either fine-tuned on \texttt{walker\_run} from the
+walk checkpoint, or trained on \texttt{walker\_run} from scratch, under an
+identical 400k-step target budget. The source policy effectively solves the walk
+task (eval return $968$). On the run task, fine-tuning reaches $742$ versus $563$
+from scratch, a $+179$ ($+32\%$) advantage at equal budget, with a much larger
+head start earlier: the warm-started policy scores $\sim\!375$ before any
+run-specific training (vs.\ $\sim\!25$ for scratch) and leads by roughly
+$4\times$ at the 100k-step mark, with the gap peaking near $+448$ and then
+narrowing as the scratch baseline---still rising at the budget limit---catches
+up. Training is stable for all three runs, and the R2 redundancy-reduction
+objective converges cleanly. A PCA analysis of the recurrent latent states shows
+that the two same-task policies occupy clearly separated regions of feature
+space and that the fine-tuned model traces a larger, cyclically structured
+(limit-cycle-like) latent manifold, while the scratch model collapses into a
+compact blob---so fine-tuning changes not only learning speed but the learned
+representation itself. Results are single-seed and at a fixed budget; we discuss
+the resulting limits on the conclusions.
+\end{abstract}
+
+\section{Objective}
+
+The goal of this track is a faithful, budget-feasible demonstration of the
+canonical Dreamer transfer experiment---train a latent world model on a source
+task, save and reload it, adapt it to a shifted task, and compare fine-tuning
+against training from scratch---using the \emph{representation-regularized}
+R2-Dreamer objective on image observations. Concretely we run the three-way
+comparison
+\[
+\begin{aligned}
+\texttt{source\_base} &:~\texttt{walker\_walk}~\text{(from scratch)},\\
+\texttt{target\_finetune} &:~\texttt{walker\_run}~\text{(initialized from \texttt{source\_base})},\\
+\texttt{target\_scratch} &:~\texttt{walker\_run}~\text{(from scratch)},
+\end{aligned}
+\]
+all on \texttt{dmc\_vision} ($64\times64$ RGB), orchestrated from a single Colab
+notebook against an unmodified upstream checkout,\footnote{\texttt{NM512/r2dreamer}~\cite{r2dreamer},
+itself a PyTorch reimplementation of DreamerV3~\cite{dreamerv3} extending
+\texttt{NM512/dreamerv3-torch}~\cite{dreamerv3torch}; behavioural changes are
+applied as marker-guarded, idempotent, reversible textual patches at launch
+time (checkpoint load/save, interval checkpoints, headless-render guard,
+serial-env fallback).} with all checkpoints, metrics, videos, and figures
+persisted to Google Drive. Every number and figure in this report is read
+directly from the committed outputs of the results notebook
+(\texttt{notebooks/06\_r2dreamer\_results.ipynb}).
+
+\section{Model}
+\label{sec:model}
+
+\paragraph{Backbone.} The agent is a DreamerV3-style latent world
+model~\cite{dreamerv3,dreamerv2,dreamer}. A convolutional encoder maps each
+$64\times64\times3$ frame to an embedding; a Recurrent State-Space Model
+(RSSM)~\cite{planet} carries a deterministic recurrent state and a stochastic
+latent and predicts forward dynamics; reward and episode-continuation heads
+decode task quantities from the latent; and an actor--critic is trained
+entirely ``in imagination'' on rollouts of the learned dynamics rather than on
+environment frames~\cite{dreamer}. The observation here is vision only (the
+encoder receives \texttt{\{image:(64,64,3)\}} and no proprioceptive MLP input).
+
+\paragraph{Representation objective (the ``R2'' in R2-Dreamer).} The upstream
+code exposes a swappable representation loss
+(\texttt{model.rep\_loss} $\in$ \{\texttt{dreamer}, \texttt{r2dreamer},
+\texttt{infonce}, \texttt{dreamerpro}\}). The standard \texttt{dreamer} setting
+learns the latent through
+pixel reconstruction with a decoder. We use \texttt{rep\_loss=r2dreamer}: a
+\emph{reconstruction-free} objective that learns the representation through a
+projector head trained with a redundancy-reduction (Barlow-Twins-style) loss
+on projected latents~\cite{barlow}, placing it in the same reconstruction-free
+model-based family as DreamerPro~\cite{dreamerpro} and contrastive
+CPC/InfoNCE~\cite{cpc} alternatives. A practical consequence is that the
+\texttt{r2dreamer} model has \emph{no decoder}: there is no imagined-frame
+``\texttt{video\_pred}'' path (which the upstream agent exposes only for
+\texttt{rep\_loss=dreamer}). Visual analysis therefore uses environment-rendered
+policy rollouts and the geometry of the RSSM latent states, not decoded
+reconstructions.
+
+\paragraph{Parameter budget.} The nominal \texttt{size25M} configuration
+instantiates $26.53$M trainable parameters, dominated by the RSSM and the R2
+projector head:
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lrl}
+\toprule
+Component & Parameters & Role \\
+\midrule
+RSSM                 & 13{,}442{,}304 & latent dynamics (recurrent + stochastic state) \\
+Projector            &  5{,}898{,}240 & R2 representation head (redundancy reduction) \\
+Value (critic)       &  1{,}869{,}951 & imagined-return value \\
+Actor (policy)       &  1{,}776{,}396 & imagination policy \\
+Reward predictor     &  1{,}573{,}503 & reward head \\
+Continue predictor   &  1{,}475{,}713 & episode-continuation head \\
+Encoder (CNN)        &    493{,}824 & $64\times64\times3 \rightarrow$ embedding \\
+\midrule
+\textbf{Total}       & \textbf{26{,}529{,}931} & \\
+\bottomrule
+\end{tabular}
+\caption{World-model components and parameter counts, read from the rollout/
+extraction logs. Each saved checkpoint is $325.9$\,MB (fp32 weights plus Adam
+optimizer moments); the six most recent interval checkpoints are retained per
+run (\texttt{checkpoint\_keep=6}).}
+\label{tab:model}
+\end{table}
+
+\section{Experimental setup and resources}
+\label{sec:setup}
+
+\paragraph{Tasks and protocol.} Source task \texttt{dmc\_walker\_walk}, target
+task \texttt{dmc\_walker\_run}, both rendered as $64\times64$ RGB
+(Figure~\ref{fig:obs}). The fine-tune run initializes \emph{all} world-model
+weights from the source checkpoint with a strict state-dict load and does
+\emph{not} carry over optimizer state (\texttt{pretrained\_strict=true},
+\texttt{load\_optimizer=false}); the scratch run is identical except for
+random initialization. Both target runs share the same 400k-step budget so the
+comparison is at equal target experience.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{ll@{\hspace{1.6em}}ll}
+\toprule
+Setting & Value & Setting & Value \\
+\midrule
+Observation        & \texttt{dmc\_vision} $64{\times}64{\times}3$ & Train ratio        & 224 \\
+Model              & \texttt{size25M}                            & Parallel envs      & 8 \\
+Representation loss & \texttt{r2dreamer} (Barlow-style)          & Eval cadence       & every 50k steps, 5 episodes \\
+Batch              & 16 sequences $\times$ length 64             & Seed               & 0 \\
+Source steps       & 800k (reached $\sim$796k)                   & Target steps       & 400k (reached $\sim$396k) \\
+\bottomrule
+\end{tabular}
+\caption{Training configuration (the \texttt{a100\_r2\_vision25m} three-way
+preset in \texttt{configs/r2dreamer/}).}
+\label{tab:config}
+\end{table}
+
+\paragraph{Compute and software.} Training and post-hoc analysis ran on a single
+NVIDIA~A100 (Google Colab). The stack is PyTorch with Hydra configuration
+(\texttt{NM512/r2dreamer}~\cite{r2dreamer} over
+\texttt{dreamerv3-torch}~\cite{dreamerv3torch}), DeepMind Control / \texttt{dm\_control}
+tasks~\cite{dmc,dmcontrol} on the MuJoCo physics engine~\cite{mujoco}, on a
+Python~3.11 runtime (the version upstream declares). Image observations are
+produced by headless CPU rendering through OSMesa
+(\texttt{MUJOCO\_GL=osmesa}) while the policy runs on CUDA; a render
+sanity-check confirms non-blank frames before any rollout
+(Figure~\ref{fig:obs}). The full run writes model-only interval checkpoints at
+evaluation boundaries; the source run in this report was interrupted and
+resumed (three appended metric segments, 326 rows discarded), and the analysis
+uses the final continuous segment to $\sim$796k steps.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.16\linewidth]{r2dreamer_render_check.png}
+\caption{A representative $64\times64$ RGB observation from the patched DMC
+vision environment (render sanity-check: non-blank, pixel mean $68$, std $33$).
+The policies learn locomotion from frames like this; because
+\texttt{rep\_loss=r2dreamer} is decoder-free, the model never reconstructs
+them.}
+\label{fig:obs}
+\end{figure}
+
+\section{Results}
+\label{sec:results}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{llrrrr}
+\toprule
+Run & Init & Task & Final eval & Final train & Env steps \\
+\midrule
+\texttt{source\_base}     & random            & \texttt{walker\_walk} & $968.3$ & $964.2$ & $\sim$796k \\
+\texttt{target\_finetune} & \texttt{source\_base} & \texttt{walker\_run}  & $742.3$ & $693.4$ & $\sim$396k \\
+\texttt{target\_scratch}  & random            & \texttt{walker\_run}  & $563.1$ & $529.7$ & $\sim$396k \\
+\bottomrule
+\end{tabular}
+\caption{Final results (DMC episodic return, $0$--$1000$). ``Eval'' is the
+deterministic 5-episode evaluation score; ``train'' is the rolling training
+return. For all three runs the best eval score equals the final eval score,
+i.e.\ no late-training collapse.}
+\label{tab:results}
+\end{table}
+
+\subsection{Source task: \texttt{walker\_walk} is effectively solved}
+
+The source model reaches an evaluation return of $968.3$ on
+\texttt{walker\_walk} (Table~\ref{tab:results}; the DMC walk reward saturates
+near $1000$). This is the prerequisite for a meaningful transfer test: the
+checkpoint we fine-tune from is a competent walker, not a half-trained one.
+Figure~\ref{fig:source} shows the monotone climb to that ceiling.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.62\linewidth]{r2dreamer_source_eval_curve.png}
+\caption{Source-task evaluation return over $\sim$796k environment steps. The
+\texttt{walker\_walk} model converges to $\approx\!968$, effectively solving the
+task and providing the initialization for the fine-tune run.}
+\label{fig:source}
+\end{figure}
+
+\subsection{Transfer: fine-tuning dominates scratch at every budget}
+
+This is the central result (Figure~\ref{fig:transfer}). Three features stand
+out. \emph{(i) A large warm start:} at the first evaluation, before any
+run-specific gradient steps, the fine-tuned policy already returns
+$\sim\!375$ on \texttt{walker\_run}, versus $\sim\!25$ for the random scratch
+policy---walk and run share enough locomotion structure that the source model
+transfers almost zero-shot. \emph{(ii) Faster convergence:} by 100k target
+steps the fine-tune is at $\sim\!600$ while scratch is near $\sim\!150$, a
+$\sim\!4\times$ gap; the fine-tune passes $700$ by $\sim$300k. \emph{(iii) A
+persistent but shrinking lead:} the fine-tune ends at $742$ and scratch at
+$563$, a $+179$ ($+32\%$) advantage at the shared 400k budget.
+
+\begin{figure}[h]
+\centering
+\begin{minipage}{0.49\linewidth}
+  \includegraphics[width=\linewidth]{r2dreamer_target_eval_curve.png}
+\end{minipage}\hfill
+\begin{minipage}{0.49\linewidth}
+  \includegraphics[width=\linewidth]{r2dreamer_finetune_advantage.png}
+\end{minipage}
+\caption{Target-task transfer. \textbf{Left:} evaluation return on
+\texttt{walker\_run} for fine-tune (green) vs.\ scratch (red); fine-tune leads
+at every evaluation point. \textbf{Right:} the step-aligned advantage
+(fine-tune $-$ scratch), which starts at $\sim\!352$, peaks at $\sim\!448$
+around 100k steps, and then declines steadily to $+179$ at the budget limit as
+the scratch baseline---still rising and not yet plateaued---closes part of the
+gap.}
+\label{fig:transfer}
+\end{figure}
+
+The advantage curve makes the dynamics explicit: transfer buys the most
+\emph{early} (peak gap near 100--150k steps), and the steady decline thereafter
+indicates that the result demonstrates \emph{sample efficiency}, not
+necessarily a higher asymptotic ceiling---the scratch curve had not flattened
+at 400k (Section~\ref{sec:caveats}).
+
+\subsection{Training dynamics and optimization health}
+
+The training-episode curves (Figure~\ref{fig:train}) corroborate the evaluation
+story and reveal a brief adaptation transient: the fine-tune begins around
+$\sim\!400$ (the inherited walk competence), \emph{dips} to $\sim\!270$ as the
+walk gait is repurposed for running---a short, recoverable negative-transfer
+phase---then climbs steadily past the scratch run for the remainder of
+training. The scratch run rises roughly linearly from $\sim\!30$ and is still
+ascending at the budget limit.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.72\linewidth]{r2dreamer_training_episode.png}
+\caption{Rolling-mean training episode return (window 8). Source
+\texttt{walker\_walk} (blue) climbs to $\sim\!950$ over 800k steps; the
+\texttt{walker\_run} fine-tune (green) starts high, dips during gait
+re-adaptation, and converges near $\sim\!690$; scratch (red) rises from near
+zero to $\sim\!530$ and is still increasing.}
+\label{fig:train}
+\end{figure}
+
+Optimization is stable for all three runs (Figure~\ref{fig:diag}): the total
+optimizer loss and the dynamics/KL, representation, value, and policy terms all
+descend and remain bounded, with no divergence. In particular the
+R2-specific Barlow redundancy-reduction term drops sharply and flattens,
+indicating the reconstruction-free representation objective trained as intended.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.86\linewidth]{r2dreamer_diagnostics.png}
+\caption{Optimization diagnostics across the three runs (source blue, fine-tune
+green, scratch red). All loss components are bounded and convergent; the
+\texttt{train/loss/barlow} panel (the R2 redundancy-reduction term) converges
+cleanly. The source run is noisier at high step counts but does not diverge.}
+\label{fig:diag}
+\end{figure}
+
+\subsection{Latent geometry: the two policies live in different basins}
+
+We extracted RSSM recurrent features along three evaluation episodes
+($1500$ states each) for the fine-tune and scratch \texttt{walker\_run}
+policies and projected them with PCA (Figure~\ref{fig:pca}). Although both
+policies solve the \emph{same} task, their latent states occupy clearly
+separated regions---near-linearly separable along the first principal
+component---so the warm-started model encodes the task differently from the
+scratch model rather than merely reaching the same representation faster. The 3D
+view is more striking: the fine-tuned model's latents trace a large, organized
+ring/limit-cycle manifold consistent with a periodic running gait, whereas the
+scratch model's latents collapse into a small, compact cluster, mirroring its
+lower return and less dynamic behaviour.
+
+\begin{figure}[h]
+\centering
+\begin{minipage}{0.42\linewidth}
+  \includegraphics[width=\linewidth]{r2dreamer_latent_pca_2d.png}
+\end{minipage}\hfill
+\begin{minipage}{0.55\linewidth}
+  \includegraphics[width=\linewidth]{r2dreamer_latent_pca_3d.png}
+\end{minipage}
+\caption{Shared-basis PCA of RSSM latent trajectories, fine-tune (blue) vs.\
+scratch (red) on \texttt{walker\_run}. \textbf{Left (2D):} the two policies
+separate along PC1. \textbf{Right (3D):} the fine-tune traces a large,
+cyclically structured manifold; the scratch policy occupies a compact blob.
+The top three principal components explain only $\approx\!9.5/3.8/3.5\%$ of the
+variance ($\sim\!17\%$ total), so these projections capture the dominant linear
+structure of a high-dimensional latent space, not its entirety
+(Section~\ref{sec:caveats}).}
+\label{fig:pca}
+\end{figure}
+
+\subsection{Rollout videos}
+
+The results notebook renders one camera rollout per checkpoint
+(\texttt{source\_base}, \texttt{target\_finetune}, \texttt{target\_scratch})
+and a rotating 3D latent-PCA animation, all embedded inline. Because the
+\texttt{r2dreamer} model is decoder-free, these are true environment renderings
+of the executed policy, not imagined reconstructions. Their qualitative content
+tracks the scores in Table~\ref{tab:results}: a near-solved walk for the source,
+a competent run for the fine-tune, and a weaker run for scratch. (A minor
+corroborating detail: the smoothest, most periodic motion---the source
+walk---produces the smallest encoded MP4.)
+
+\section{Discussion}
+
+\paragraph{What the experiment shows.} On a visual locomotion shift, a
+representation-regularized DreamerV3 world model transfers strongly: a competent
+\texttt{walker\_walk} model gives an almost zero-shot head start on
+\texttt{walker\_run} ($\sim\!375$ vs.\ $\sim\!25$), learns several times faster
+mid-training ($\sim\!4\times$ at 100k steps), and retains a clear $+179$
+advantage at a fixed 400k budget. The whole machinery---strict checkpoint
+save/reload across tasks, the reconstruction-free R2 objective, and headless
+vision rendering---works end to end, and the comparison is clean because source,
+fine-tune, and scratch differ only in initialization.
+
+\paragraph{Efficiency versus ceiling.} The shrinking advantage curve
+(Figure~\ref{fig:transfer}, right) is the honest qualifier: scratch was still
+improving at the budget limit, so the evidence supports a large
+\emph{sample-efficiency} benefit from transfer rather than a proven higher
+ceiling. Whether the $+179$ gap is permanent or merely a head start that a much
+longer scratch run would erase is not resolved by this budget.
+
+\paragraph{Representation, not just speed.} The latent-geometry result is the
+most interesting qualitative finding. Two policies trained to the same task from
+different initializations end up in measurably different, near-linearly
+separable representational regions, and the better policy carries a richer,
+cyclically structured latent manifold. This suggests fine-tuning lands the world
+model in a distinct basin shaped by the source task---useful context for
+interpreting transfer beyond the scalar return, and a reminder that the
+reconstruction-free R2 latent is structured enough to read locomotion phase
+from directly.
+
+\paragraph{Why R2 / reconstruction-free here.} Replacing the pixel decoder with
+a redundancy-reduction objective~\cite{barlow,dreamerpro} keeps the model
+focused on control-relevant latent structure and removes the cost and artifacts
+of pixel reconstruction; the trade-off is the loss of decoded
+``imagination'' visualizations. The clean convergence of the Barlow term and the
+strong control performance indicate the objective is adequate for this task,
+though this report does not isolate its contribution against the standard
+\texttt{dreamer} reconstruction loss.
+
+\section{Threats to validity and caveats}
+\label{sec:caveats}
+
+\begin{itemize}
+\item \textbf{Single seed.} All three runs are seed~0; there are no error bars.
+      The mid-training $\sim\!4\times$ gap and the $+179$ final advantage are
+      large relative to typical DMC run-to-run noise, but statistical claims
+      would require additional seeds.
+\item \textbf{Fixed budget, scratch not converged.} The scratch baseline is
+      still rising at 400k steps, so the advantage measures sample efficiency at
+      a fixed budget, not an asymptotic ceiling difference.
+\item \textbf{Coarse evaluation.} Evaluation uses 5 deterministic episodes every
+      50k steps; the curves are therefore mildly noisy and the reported scores
+      are point estimates.
+\item \textbf{PCA variance.} The latent projections explain only $\sim\!17\%$ of
+      the variance in three components; the separation and ring structure are
+      real on the dominant axes but should not be read as the full latent
+      geometry.
+\item \textbf{No representation-loss ablation.} We run only
+      \texttt{rep\_loss=r2dreamer}; we do not compare against the
+      \texttt{dreamer}, \texttt{infonce}, or \texttt{dreamerpro} objectives on
+      this task, so the report characterizes \emph{this} configuration rather
+      than attributing the result to the R2 objective specifically.
+\item \textbf{Decoder-free.} With \texttt{rep\_loss=r2dreamer} there is no
+      decoder, so no reconstruction or imagination-quality metric is
+      available; visual evidence is limited to executed-policy rollouts and latent
+      geometry.
+\item \textbf{Interrupted source run.} The source run was resumed
+      (three appended metric segments); the analysis uses the final continuous
+      segment. The reloaded checkpoint and all transfer results are unaffected.
+\end{itemize}
+
+\section{Conclusion and future work}
+
+Within a single A100 budget, R2-Dreamer exhibits clean, sizable positive
+transfer on a pixel-based \texttt{walker\_walk}\,$\rightarrow$\,\texttt{walker\_run}
+shift---large warm start, several-fold mid-training sample efficiency, a $+179$
+final advantage at equal budget---together with a distinct, better-structured
+latent representation in the fine-tuned model. The most valuable next steps are:
+(1) \textbf{2--3 additional seeds} for the target pair to put error bars on the
+advantage; (2) \textbf{extended budgets} for scratch (and fine-tune) to separate
+``head start'' from ``higher ceiling''; (3) a \textbf{representation-loss
+ablation} (\texttt{dreamer} vs.\ \texttt{r2dreamer} vs.\ \texttt{infonce} vs.\
+\texttt{dreamerpro}) to attribute the effect; and (4) \textbf{harder shifts}
+(e.g.\ Meta-World task transfer, or proprio$\rightarrow$vision) to test the
+generality of the transfer.
+
+\section*{Reproduction}
+
+Open \texttt{notebooks/01\_r2dreamer\_foundation.ipynb} on a Colab A100 with a
+Python~3.11 runtime; the default \texttt{a100\_vision} preset reproduces the runs
+above (set \texttt{R2\_PRESET=t4\_proprio} for the smaller proprioceptive
+variant). After the smoke test, run the source, fine-tune, and scratch cells.
+Results, rollout videos, and the latent analysis are regenerated by
+\texttt{notebooks/06\_r2dreamer\_results.ipynb}, from which every figure and
+number in this report is taken.
+
+\begin{thebibliography}{99}
+
+\bibitem{dreamerv3} D.~Hafner, J.~Pasukonis, J.~Ba, and T.~Lillicrap.
+\emph{Mastering Diverse Domains through World Models}. arXiv:2301.04104, 2023.
+
+\bibitem{dreamerv2} D.~Hafner, T.~Lillicrap, M.~Norouzi, and J.~Ba.
+\emph{Mastering Atari with Discrete World Models}. ICLR, 2021.
+arXiv:2010.02193.
+
+\bibitem{dreamer} D.~Hafner, T.~Lillicrap, J.~Ba, and M.~Norouzi.
+\emph{Dream to Control: Learning Behaviors by Latent Imagination}. ICLR, 2020.
+arXiv:1912.01603.
+
+\bibitem{planet} D.~Hafner, T.~Lillicrap, I.~Fischer, R.~Villegas, D.~Ha,
+H.~Lee, and J.~Davidson. \emph{Learning Latent Dynamics for Planning from
+Pixels}. ICML, 2019. arXiv:1811.04551.
+
+\bibitem{dreamerpro} F.~Deng, I.~Jang, and S.~Ahn. \emph{DreamerPro:
+Reconstruction-Free Model-Based Reinforcement Learning with Prototypical
+Representations}. ICML, 2022. arXiv:2110.14565.
+
+\bibitem{barlow} J.~Zbontar, L.~Jing, I.~Misra, Y.~LeCun, and S.~Deny.
+\emph{Barlow Twins: Self-Supervised Learning via Redundancy Reduction}. ICML,
+2021. arXiv:2103.03230.
+
+\bibitem{cpc} A.~van den Oord, Y.~Li, and O.~Vinyals.
+\emph{Representation Learning with Contrastive Predictive Coding}.
+arXiv:1807.03748, 2018.
+
+\bibitem{dmc} Y.~Tassa, Y.~Doron, A.~Muldal, T.~Erez, Y.~Li, D.~de~Las~Casas,
+D.~Budden, A.~Abdolmaleki, J.~Merel, A.~Lefrancq, T.~Lillicrap, and
+M.~Riedmiller. \emph{DeepMind Control Suite}. arXiv:1801.00690, 2018.
+
+\bibitem{dmcontrol} S.~Tunyasuvunakool, A.~Muldal, Y.~Doron, S.~Liu, S.~Bohez,
+J.~Merel, T.~Erez, T.~Lillicrap, N.~Heess, and Y.~Tassa.
+\emph{dm\_control: Software and Tasks for Continuous Control}.
+Software Impacts, 6:100022, 2020.
+
+\bibitem{mujoco} E.~Todorov, T.~Erez, and Y.~Tassa.
+\emph{MuJoCo: A Physics Engine for Model-Based Control}. IROS, 2012.
+
+\bibitem{r2dreamer} NM512. \emph{r2dreamer}. GitHub repository,
+\url{https://github.com/NM512/r2dreamer}.
+
+\bibitem{dreamerv3torch} NM512. \emph{dreamerv3-torch: PyTorch Implementation of
+DreamerV3}. GitHub repository, \url{https://github.com/NM512/dreamerv3-torch}.
+
+\end{thebibliography}
+
+\end{document}

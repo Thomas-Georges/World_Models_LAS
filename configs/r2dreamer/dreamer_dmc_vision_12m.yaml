@@ -1,0 +1,35 @@
+experiment_name: walker_walk_to_run_dmc_vision_dreamer12m
+
+algorithm:
+  rep_loss: dreamer
+  model: size12M
+
+build_scale:
+  tier: a100_vision_12m
+  intended_gpu: A100
+  notes: "Dreamer DMC Vision 12M baseline. Use the 25M R2-Dreamer A100 preset for the main vision experiment."
+
+environment:
+  env: dmc_vision
+  source_task: dmc_walker_walk
+  target_task: dmc_walker_run
+  disable_image_render: false
+  serial_envs: false
+
+training:
+  seed: 0
+  source_steps: 1010000
+  target_steps: 500000
+  batch_size: 16
+  batch_length: 64
+  train_ratio: 128
+  env_num: 8
+  eval_every: 50000
+  eval_episodes: 10
+  save_eval_checkpoints: true
+  checkpoint_keep: 8
+  progress_every: 100
+
+rendering:
+  mujoco_gl: osmesa
+  mujoco_egl_device_id: 0

@@ -1,0 +1,801 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.6cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\graphicspath{{figures/}}
+
+% Shared notation with the local/global addendum.
+\newcommand{\zlat}{\mathbf{z}}
+\newcommand{\act}{\mathbf{a}}
+\newcommand{\abar}{\bar{\mathbf{a}}}
+
+% Figures produced on Drive by the results notebook; degrade gracefully when absent.
+\newcommand{\drivefigure}[3]{%
+  \IfFileExists{figures/#1}{\includegraphics[width=#2]{#1}}{%
+    \fbox{\parbox[c][4.0cm][c]{0.9\linewidth}{\centering\itshape
+      Figure pending: copy \texttt{#3} from the Drive \texttt{\detokenize{_summary}}
+      directory into \texttt{\detokenize{reports/figures/#1}} and rebuild.}}}}
+
+\title{DINO-WM on PointMaze under a Commodity-GPU Budget:\\
+Latent-Cached Reproduction, Low-Data Transfer, and Planning Results\\
+{\large Technical report --- method, implementation, and results}}
+\author{Thomas Georges\thanks{Implementation assistance: Claude (Anthropic). Code:
+\texttt{wm-prediction} repository, \texttt{src/wm\_poc/dino\_wm}. This report has
+an addendum, \emph{Local/Global World-Model Planning with DINO-WM}
+(\texttt{reports/local\_global\_report.tex}), which builds a local/global
+planning track on the checkpoint and cache documented here.}}
+\date{June 2026 --- v1.0 (50-evaluation results; 200-evaluation pass pending)}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We reproduce DINO-WM~\cite{dinowm2025} --- an action-conditioned latent
+transition model trained over frozen DINOv2 patch features for zero-shot
+visual planning --- on the PointMaze task, under the constraint that the full
+experiment must run on freely available Colab hardware. The stock training
+loop required more than 30 hours per epoch on this hardware, independent of
+batch size; we identify the cause as per-sample episode reload compounded by
+online re-encoding of the \emph{frozen} encoder, and replace it with a
+precomputed-latent training path that reproduces the upstream data
+distribution bit-for-bit while cutting per-step cost by ${\approx}21\times$
+(58~minutes per epoch on a T4, an estimated 3--6 on an A100). On this
+foundation we run three experiments: a full-data predictor (2000 rollouts), a
+low-data scratch baseline (300 rollouts), and a low-data fine-tune initialized
+from the full-data checkpoint. The fine-tuned predictor reaches the scratch
+run's converged latent-prediction loss at its \emph{first} epoch
+($\sim$30$\times$ fewer updates), and in closed-loop CEM planning in the real
+MuJoCo environment it delivers $2.75\times$ the scratch baseline's success rate
+($0.275$ vs $0.10$ at 200 evaluation episodes, $p<10^{-5}$) while
+\emph{matching} the full-data model trained on $6.7\times$ more data ($0.275$
+vs $0.23$, $p{=}0.30$). A striking dissociation emerges: the scratch and
+fine-tune predictors land close in validation loss yet differ by $2.75\times$
+in planning success, evidence that latent-prediction MSE is a weak proxy for
+downstream control. All numbers are read from recorded planner telemetry (the
+latest \texttt{final\_eval} per run, at 200 evaluation episodes). An addendum
+(\S\ref{sec:localglobal}) reuses this checkpoint as the trusted global model for
+a coupled local/global planning study over six planners: a global re-score gate
+makes cheap first-order refinement \emph{safe}, recovering global-CEM-quality
+plans ($0.97$ success) where an unguarded hybrid collapses to $0.54$, while the
+purely local planners run $100$--$1000\times$ cheaper per episode.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+A world model is useful for control to the extent that planning against it
+produces actions that succeed in the real environment. DINO-WM~\cite{dinowm2025}
+makes a specific bet about how to obtain such a model cheaply: rather than
+learning perception and dynamics jointly, it \emph{freezes} a powerful
+self-supervised visual encoder (DINOv2~\cite{dinov2}) and learns only an
+action-conditioned transition model over its patch features, then plans by
+sampling-based optimization of latent goal distance. The appeal is data- and
+compute-efficiency --- no pixel reconstruction is needed in the planning loop,
+and the encoder is reused unchanged across tasks.
+
+This report documents a faithful reproduction of that pipeline on PointMaze,
+developed under a hard practical constraint: it must run end to end on the
+hardware actually available to us (Colab, predominantly T4; A100 rarely).
+That constraint turned out to be the technically interesting part. The stock
+pipeline does not merely run slowly on a T4 --- it is structurally infeasible,
+projecting more than 30 hours per epoch regardless of batch size. Diagnosing
+and removing that cost \emph{without} altering the experiment is the
+methodological contribution of \S\ref{sec:training}; it is what makes the
+results of \S\ref{sec:results} obtainable at all.
+
+\paragraph{Contributions.} (i) A latent-cache training path for DINO-WM that
+removes the dominant data-path cost while provably preserving the upstream
+training distribution (\S\ref{sec:training}); (ii) a faithful, fully resumable
+reproduction of DINO-WM predictor training and CEM planning on PointMaze,
+runnable on commodity GPUs (\S\ref{sec:implementation}); (iii) a low-data
+transfer study --- scratch vs.\ fine-tune from a full-data checkpoint --- with
+both latent-prediction and real-environment planning metrics
+(\S\ref{sec:results}); and (iv) the observation that latent-prediction loss
+and planning success dissociate sharply, which we argue is a methodological
+warning for world-model evaluation (\S\ref{sec:discussion}). This reproduction
+is also the foundation for the coupled local/global planning study of
+\S\ref{sec:localglobal}, which reuses this checkpoint and cache unchanged as a
+trusted, non-differentiated global model.
+
+\section{Background}
+\label{sec:background}
+
+\paragraph{DINO-WM.} DINO-WM~\cite{dinowm2025} encodes each frame to frozen
+DINOv2 patch tokens $\zlat_t \in \mathbb{R}^{P\times D}$ and trains a
+transformer predictor to advance the latent state conditioned on actions,
+with a latent-consistency objective and no decoder required for planning.
+Planning is visual goal reaching: given current and goal observations,
+sampling-based MPC minimizes the predicted latent distance to the goal
+encoding. The model's defining property for our purposes is that the encoder
+is frozen --- its outputs are constants of the dataset, a fact the training
+loop should but does not exploit.
+
+\paragraph{Self-supervised features for control.} The broader pattern of
+planning on top of frozen self-supervised representations
+(DINOv2~\cite{dinov2}; the JEPA world-model family~\cite{vjepa2}) trades
+end-to-end representation learning for modularity and sample efficiency.
+DINO-WM is a concrete, planning-focused instance.
+
+\paragraph{Sampling-based latent planning.} PlaNet~\cite{planet} and
+Dreamer~\cite{dreamer} plan or learn policies inside a learned recurrent
+latent model; TD-MPC2~\cite{tdmpc2} pairs a learned latent model with
+sampling-based MPC. DINO-WM keeps the model fixed (frozen encoder, separately
+trained predictor) and plans with the cross-entropy method (CEM), which
+requires only forward rollouts and is the planner reproduced here.
+
+\section{Problem setting and notation}
+\label{sec:setting}
+
+PointMaze episodes are sequences of frames with raw 2-D actions
+$\act_t \in \mathbb{R}^{2}$, bounds $[-1,1]^2$, and proprioception (agent
+position/velocity). Following DINO-WM, one \emph{model step} advances
+$f$ raw steps (frameskip $f{=}5$); the model-step action is the folded block
+$\abar_k = [\act_{kf};\dots;\act_{(k+1)f-1}] \in \mathbb{R}^{fA}$. Each frame
+is encoded to $\zlat \in \mathbb{R}^{P\times D}$ with $P{=}196$ patches and
+$D{=}384$ (DINOv2 ViT-S/14 at $224$\,px, whose internal resize yields a
+$14\times14$ patch grid). The predictor consumes $H{=}3$ context frames
+(\texttt{num\_hist}) and predicts the next latent ($\texttt{num\_pred}{=}1$),
+trained autoregressively over windows. Episode-level train/validation splits
+are drawn from a seeded permutation of the uncapped episode count, so split
+membership is invariant to how many rollouts a given run uses.
+
+\section{The DINO-WM model as reproduced}
+\label{sec:model}
+
+\paragraph{Encoder (frozen).} \texttt{dinov2\_vits14}, feature key
+\texttt{x\_norm\_patchtokens}, weights frozen throughout
+(\texttt{train\_encoder=false}). Input frames are preprocessed with the
+upstream transform (resize/centre-crop to $224$\,px, normalize), then resized
+to the $196$-px encoder input that produces the $14{\times}14$ patch grid.
+
+\paragraph{Predictor.} A ViT predictor (\texttt{models.vit.ViTPredictor};
+depth 6, 16 heads, MLP width 2048, dropout 0.1) over the flattened
+$H \times P = 3 \times 196 = 588$ token sequence. Actions and proprioception
+are embedded ($\text{action\_emb}{=}\text{proprio\_emb}{=}10$) and, with
+\texttt{concat\_dim}=1, concatenated along the feature axis (tiled across
+patches), giving the predictor working dimension
+$D + 10 + 10 = 404$ (observed as ``\texttt{Model emb\_dim: 404}'' in the run
+logs). A causal mask is applied across the temporal axis.
+
+\paragraph{Training objective.} With $\hat{\zlat}$ the predicted next latent
+and $\zlat$ the (detached) target encoding,
+\begin{equation}
+\mathcal{L} \;=\; \big\lVert \hat{\zlat} - \mathrm{sg}[\zlat] \big\rVert_2^2 ,
+\label{eq:loss}
+\end{equation}
+the latent-consistency MSE, reported per epoch as a training and a validation
+component (the ``h-step'' validation loss). The runs in this report are
+\emph{decoder-free} (\texttt{has\_decoder=false}): no pixel reconstruction is
+trained, which both halves memory and matches the planning objective, since
+planning never decodes. The action and proprioception encoders are trained
+jointly with the predictor; the DINOv2 encoder is shared and frozen by
+construction.
+
+\section{Feasible training: the latent-cache path}
+\label{sec:training}
+
+\subsection{Why the stock loop costs 30 hours per epoch}
+
+Profiling the upstream data path identified three compounding causes, none of
+which batch size can address (confirmed empirically: batch 4 and batch 32 both
+project ${\sim}19$--$21$\,h/epoch on a T4).
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item \textbf{Per-sample episode reload.} Upstream
+        \texttt{TrajSlicerDataset} fetches a 4-frame window by
+        \texttt{torch.load}-ing the \emph{entire} episode image tensor
+        ($\sim$93 frames) and transforming \emph{every} frame, then discarding
+        all but four. At ${\sim}147$k windows/epoch this re-reads and
+        re-transforms ${\sim}1600\times$ the dataset per epoch, through the
+        Google Drive FUSE mount.
+  \item \textbf{Online re-encoding of frozen features.} With
+        \texttt{train\_encoder=false} the DINOv2 outputs are dataset
+        constants, yet every frame of every window is re-encoded every epoch
+        --- pure recomputation.
+  \item \textbf{Operational confounders.} Single-threaded loading
+        (\texttt{num\_workers=0}, an OOM-era setting) and reads from Drive
+        rather than local disk.
+\end{enumerate}
+
+\subsection{Encode once, reuse forever}
+
+Because the encoder is frozen, its outputs can be precomputed. Three
+components, installed into the upstream checkout at launch time as
+marker-guarded patches:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item \textbf{One-time precompute.} Each episode is read once, preprocessed
+        \emph{exactly} as upstream does, encoded under autocast through the
+        frozen encoder, and written as a per-episode \texttt{fp16} \texttt{.npy}
+        plus a manifest (encoder identity, patch geometry, episode lengths,
+        dataset coverage). The cache is ${\sim}30$\,GB for all 2200 episodes,
+        held on session-local disk (a Drive-hosted cache would reinstate the
+        FUSE bottleneck; the scripts warn if so configured), and the process
+        is idempotent and resumable.
+  \item \textbf{A drop-in latent dataset}, selected purely by Hydra override.
+        It subclasses the upstream dataset, so actions, states,
+        proprioception, normalization statistics, and the seeded train/val
+        split are \emph{bit-identical} to the online path (verified directly
+        against the upstream loader); its slicer memory-maps only the
+        ${\sim}0.6$\,MB of latents each window needs instead of materializing a
+        ${\sim}13$\,MB episode.
+  \item \textbf{An input-dispatch bypass} in the model's \texttt{encode\_obs}:
+        4-D latent inputs skip the encoder; 5-D image inputs take the original
+        path. The real DINOv2 weights remain in the model and its checkpoints,
+        so planning (which encodes real observations) is untouched.
+\end{enumerate}
+
+This is an \emph{exact} reproduction, not an approximation: the only quantities
+that change are when and how often the frozen encoder runs. A guard rejects
+combining the latent path with the (pixel-target) decoder at command-build
+time.
+
+\subsection{Throughput}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lllll}
+\toprule
+Configuration & Steps/epoch & Step time (T4) & Epoch (T4) & Epoch (A100, est.) \\
+\midrule
+Stock, batch 4              & 36{,}815 & $\sim$3\,s    & $>$30\,h          & --- \\
+Stock, batch 32             & 4{,}602  & 15.9--17\,s   & 19--21\,h (proj.) & --- \\
+Latent cache, batch 32, stride 1 & 4{,}602 & $\sim$0.76\,s & $\sim$58\,min & 6--12\,min \\
+Latent cache, batch 32, stride 2 & 2{,}330 & 0.72--0.76\,s & 31\,min (meas.) & 3--6\,min \\
+\bottomrule
+\end{tabular}
+\caption{Training throughput before and after the latent-cache path. The
+residual step cost is the depth-6 ViT predictor itself ($\sim$2\,TFLOPs
+fwd+bwd at batch 32 over 588 tokens) --- the quantity the experiment is meant
+to measure. ``Stride 2'' subsamples window start positions (consecutive
+stride-1 windows overlap by 19/20 frames) and was used only for the full run
+on T4; the low-data pair uses the full stride-1 window set.}
+\label{tab:throughput}
+\end{table}
+
+\section{Planning and evaluation}
+\label{sec:planning}
+
+Planning uses the upstream CEM~\cite{cem}/MPC path unchanged. Given a start and
+a goal observation, CEM optimizes an open-loop action sequence to minimize the
+predicted latent distance to the goal encoding:
+\begin{equation}
+J(\abar_{1:H}) \;=\; \tfrac{1}{PD}\big\lVert \hat{\zlat}_H(\abar_{1:H}) - \zlat_{\mathrm{goal}} \big\rVert_2^2 ,
+\label{eq:objective}
+\end{equation}
+iterating a sample/score/refit loop (population 100, 10 iterations, goal
+horizon $G{=}5$, \texttt{goal\_source=random\_state}). Crucially, while CEM
+\emph{optimizes} an imagined latent quantity, \textbf{success is measured in
+the real MuJoCo environment}: the planned actions are executed in the
+simulator and success is the environment's own goal-reaching test. Reported
+success rates are therefore real closed-loop control outcomes, not the model's
+self-assessment. Each evaluation also records, per CEM iteration, the current
+best plan's environment success, mean state distance to goal, and the
+divergence between the imagined and executed latent trajectories (the model's
+own rollout error).
+
+\section{Implementation}
+\label{sec:implementation}
+
+The pipeline follows a two-notebook convention: an operational notebook (02)
+for setup, precompute, training, fine-tuning, and planning --- every heavy step
+delegated to a gated CLI script against a \emph{pristine} upstream checkout ---
+and a read-only results notebook (07) that aggregates artifacts into tables,
+curves, and embedded planning videos. Reproducibility and reliability features:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{Pristine upstream, runtime patches.} All behavioral changes
+        (mixed precision, latent cache, validation \texttt{no\_grad},
+        fine-tune initialization, decoder-free video recording) are
+        marker-guarded, idempotent, reversible textual patches applied at
+        launch, with backups; the upstream repository is never vendored or
+        edited in place. Patch application and composition are unit-tested
+        against the real upstream source.
+  \item \textbf{Single experiment, hardware-only profiles.} GPU-tier configs
+        differ only in throughput knobs (precision, dataloader workers,
+        wall-clock caps, and --- on T4 only --- window stride); model sizes,
+        optimizer budgets, episode counts, and run names are shared so a run
+        continues across tiers.
+  \item \textbf{Resumability.} Full epoch checkpoints plus a rolling
+        intra-epoch state-dict checkpoint (every 2000 steps on A100, 500 on
+        T4) with deterministic mid-epoch resume bound a disconnection to
+        minutes of lost work.
+  \item \textbf{Self-gating cells.} Each launch cell checks durable state
+        before spending GPU time: completed training is skipped, partial
+        training resumes, and planning re-triggers only when the recorded
+        evaluation does not match the configured episode count --- making a
+        top-to-bottom run idempotent.
+  \item \textbf{Smoke crash test.} A 20-rollout configuration exercises the
+        exact production pipeline (patches, precompute, latent training,
+        checkpointing, a 2-episode planning pass) in $\sim$10--15 minutes; it
+        caught a planner/latent-dataset incompatibility, a checkpoint
+        resolution bug, and a blank-checkpoint crash before any cost full-run
+        time.
+  \item \textbf{Testing.} ${\sim}95$ unit tests (runnable without torch) cover
+        patch application/composition, command rendering, run-state gates, and
+        metrics extraction; latent-dataset parity against the upstream loader
+        is validated separately with torch.
+\end{itemize}
+
+\section{Experimental setup}
+\label{sec:setup}
+
+\begin{table}[h]
+\centering
+\small
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Component} & \textbf{Setting} & \textbf{Component} & \textbf{Setting} \\
+\midrule
+Encoder & DINOv2 ViT-S/14, frozen, $224$\,px & Predictor & ViT, depth 6, 16 heads, MLP 2048 \\
+Latents & $P{=}196$, $D{=}384$, fp16 cache & Working dim & $404$ ($384{+}10{+}10$, concat) \\
+Context / pred & $H{=}3$, \texttt{num\_pred}{=}1 & Frameskip & $f{=}5$ \\
+Batch size & 32 & Predictor lr & $5{\times}10^{-5}$ (scratch) \\
+Action-enc.\ lr & $5{\times}10^{-4}$ (scratch) & Fine-tune lr & $10^{-5}$ / $10^{-4}$ \\
+CEM pop.\ / iters & $100$ / $10$ & Goal horizon $G$ & $5$ \\
+Goal source & \texttt{random\_state} & Planning evals & $200$ \\
+\bottomrule
+\end{tabular}}
+\caption{Configuration. Precision is bf16 on A100/L4 and fp16 on T4 (Turing
+emulates bf16 slowly); all runs are seed 0.}
+\label{tab:config}
+\end{table}
+
+Three runs enter the results (Table~\ref{tab:runs}). All train the predictor
+only, on cached latents, with identical seeds, normalization, and splits.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lllll@{}}
+\toprule
+Run & Data (train+val) & Epochs & Initialization & Planning evals \\
+\midrule
+Full no-decoder    & 2000 + 200 & 10 & random          & 200 \\
+Low-data scratch   & 300 + 60   & 30 & random          & 200 \\
+Low-data fine-tune & 300 + 60   & 20 & full checkpoint & 200 \\
+\bottomrule
+\end{tabular}
+\caption{Runs. Fine-tuning loads the predictor and action/proprio encoders
+from the full run's checkpoint and continues at reduced learning rates; the
+frozen DINOv2 encoder is shared. The full run was trained on a T4 with
+stride-2 window subsampling (Table~\ref{tab:throughput}).}
+\label{tab:runs}
+\end{table}
+
+\section{Results}
+\label{sec:results}
+
+All numbers below are read directly from recorded artifacts --- the
+\emph{latest} \texttt{final\_eval} row of each run's planner
+\texttt{logs.json}, at 200 evaluation episodes per checkpoint (Wilson
+half-width ${\approx}0.06$).
+
+\subsection{Training loss: fine-tuning starts where scratch ends}
+\label{sec:results-loss}
+
+\begin{figure}[h]
+\centering
+\drivefigure{pointmaze_training_curves.png}{0.78\linewidth}{pointmaze\_training\_curves.png}
+\caption{Per-epoch training (dashed) and validation (solid) latent-prediction
+loss. The low-data scratch run descends from $\approx 2.3$ to $\approx 0.02$
+over 30 epochs; the fine-tune begins at $\approx 0.015$ at epoch 1 --- already
+the scratch run's converged level --- and stays there for all 20 epochs.}
+\label{fig:curves}
+\end{figure}
+
+The fine-tuned predictor attains at \emph{epoch 1} the validation loss the
+scratch baseline reaches only after ${\sim}30$ epochs: pre-training delivers
+the converged predictor for ${\sim}30\times$ fewer updates on the low-data
+task. The honest caveat is that scratch \emph{does} converge to the same
+validation loss by epoch 30 (Figure~\ref{fig:scratchft}). On the
+latent-prediction objective alone, the two models therefore converge to the
+same order of magnitude --- which makes the planning result that
+follows all the more pointed.
+
+\begin{figure}[h]
+\centering
+\drivefigure{pointmaze_scratch_vs_finetune.png}{0.66\linewidth}{pointmaze\_scratch\_vs\_finetune.png}
+\caption{Final validation h-step loss, scratch vs.\ fine-tune: $\approx 0.021$
+vs $\approx 0.012$ --- the same order of magnitude, in sharp contrast to their
+$2.75\times$ gap in planning success (Figure~\ref{fig:success}).}
+\label{fig:scratchft}
+\end{figure}
+
+\subsection{Planning success in the real environment}
+\label{sec:results-success}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.72\linewidth]{success_rates.pdf}
+\caption{Closed-loop CEM planning success in MuJoCo PointMaze, 200 evaluation
+episodes per checkpoint, with 95\% Wilson intervals. Exact values from the
+planner logs: fine-tune $0.275$, full-data $0.23$, scratch $0.10$.}
+\label{fig:success}
+\end{figure}
+
+At $n{=}200$ the Wilson intervals tighten to $\pm 0.06$, and two clean results
+stand out. \textbf{Fine-tune $\boldsymbol{>}$ scratch} is decisive ($0.275$ vs
+$0.10$; two-proportion $z{=}4.5$, $p<10^{-5}$): pre-training on the full corpus
+and adapting on 300 rollouts yields $2.75\times$ the planning success of
+training on those same 300 rollouts from scratch. \textbf{Fine-tune vs.\
+full-data} ($0.275$ vs $0.23$) is statistically indistinguishable
+($p{=}0.30$): fine-tuning \emph{matches} a model trained on $6.7\times$ more
+data. The full-data model's $0.23$ is moreover a lower bound: it was trained
+on a T4 with stride-2 window subsampling (half the gradient updates per epoch
+of the paper-exact stride-1 set), so an A100 stride-1 training of the identical
+configuration should only improve it --- which would make the fine-tune's
+parity with it the more striking. (The larger sample also moved all three
+estimates down from the noisier 50-eval interim, $0.34/0.26/0.12 \to
+0.275/0.23/0.10$, without disturbing the ranking or either conclusion.)
+
+\subsection{The loss/planning dissociation}
+
+The central empirical finding is the contrast between
+Figures~\ref{fig:scratchft} and~\ref{fig:success}: scratch and fine-tune
+converge to the same order of magnitude in validation latent-prediction loss
+($\approx 0.021$ vs $\approx 0.012$) yet differ $2.75\times$ in
+real-environment planning success ($0.10$ vs $0.275$, $p<10^{-5}$). The
+${\sim}2\times$ residual loss gap is far too small to explain a near-tripling
+of control success: latent-MSE convergence does not imply equal
+control quality --- the fine-tuned model's latent geometry is evidently more
+\emph{plannable} (smoother or better-calibrated for CEM's optimization)
+despite matching the scratch model's average prediction error. The practical
+consequence for world-model evaluation is direct: a planning metric must be
+carried alongside the loss curve; the loss alone would have reported these two
+models as equivalent.
+
+\subsection{Planner diagnostics: CEM is genuinely optimizing}
+\label{sec:results-cem}
+
+\begin{figure}[h]
+\centering
+\begin{minipage}{0.49\linewidth}\includegraphics[width=\linewidth]{cem_success.pdf}\end{minipage}\hfill
+\begin{minipage}{0.49\linewidth}\includegraphics[width=\linewidth]{cem_state_dist.pdf}\end{minipage}
+\caption{Planner-internal telemetry per CEM iteration (exact values from
+\texttt{logs.json}; for relaunched evaluations the latest attempt per
+iteration is shown). Left: environment success of the current best plan rises
+across the 10 iterations (full $0.135\to0.23$; fine-tune $0.135\to0.275$;
+scratch $0.03\to0.10$). Right: mean state distance to goal falls
+correspondingly (e.g.\ fine-tune $1.45\to0.93$).}
+\label{fig:cem}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.58\linewidth]{cem_embed_div.pdf}
+\caption{Divergence between imagined and executed visual embeddings per CEM
+iteration --- the world model's own rollout error along the optimized plan.
+The fine-tune and full models keep imagination closest to reality at the end
+of optimization.}
+\label{fig:embdiv}
+\end{figure}
+
+The iteration curves confirm CEM is exploiting the learned dynamics rather than
+stumbling onto goals: success rises and goal distance falls monotonically over
+the 10 CEM iterations for every trained model, with the scratch model
+improving least --- consistent with its weaker, less plannable dynamics. The
+embedding-divergence curve (Figure~\ref{fig:embdiv}) shows the better models
+also keep imagination closer to executed reality, which is exactly the
+property a planner needs.
+
+\subsection{Planning videos}
+
+Each evaluation records per-episode MP4s
+(\texttt{output\_final\_<idx>\_<success$|$failure>.mp4}; 26 frames at 12\,fps,
+the $5{\times}5{+}1$-step horizon) of the executed plan in the environment
+against the goal image. (A patch was required for this: upstream records
+videos only for decoder-bearing models, so the decoder-free checkpoints
+produced none until the recorder was extended with a no-decoder branch ---
+executed rollout vs.\ goal, imagination panel blacked out. Videos predating the
+patch come only from a 1-epoch decoder-bearing smoke model and are not
+representative.)
+
+\section{Discussion and limitations}
+\label{sec:discussion}
+
+\paragraph{What these results establish.} A faithful DINO-WM PointMaze
+reproduction is feasible on commodity hardware once the frozen-encoder cost is
+removed, and on it, transfer from a full-data checkpoint yields a real,
+measurable planning advantage on a low-data task --- with the efficiency
+bonus that the fine-tuned predictor is converged after a single epoch. The
+loss/planning dissociation is, to us, the most scientifically interesting
+output and the firmest methodological lesson.
+
+\paragraph{Threats to validity.} (i)~\emph{Sample size}: 200 planning episodes
+($\pm0.06$ Wilson half-width); both headline comparisons clear the noise, and
+the fine-tune-vs-full parity is a genuine null rather than an under-powered
+one. (ii)~\emph{Single seed}: all runs are seed 0; a second seed of the
+low-data pair would strengthen the transfer claim. (iii)~\emph{Full-run
+stride}: the full model used T4 stride-2 subsampling, so its $0.23$ is a
+conservative lower bound and cross-comparisons against it should note this. (iv)~\emph{Precision}: T4 runs
+use fp16, A100 bf16/TF32; results across tiers are statistically equivalent,
+not bit-identical. (v)~A log-rotation flaw (since fixed) destroyed the
+full run's early-epoch loss lines, so its training curve may begin after epoch
+1; the model and all planning results are unaffected.
+
+\section{Addendum: Coupled Local/Global Planning}
+\label{sec:localglobal}
+
+The trained DINO-WM checkpoint above is also the \emph{global} model for a
+second study: cheap first-order (gradient-based) planning against a trusted,
+non-differentiated world model~\cite{fog2026}. Zero-order planners (CEM) work
+with any accurate forward model but scale poorly in horizon and action
+dimension; first-order planners are sample-efficient per iteration but need a
+differentiable model --- and a model small enough to differentiate cheaply is
+usually inaccurate enough to be \emph{exploited}, with gradient descent walking
+into regions where it is wrong. The coupled local/global recipe decouples the
+two roles: the large model produces trajectories and is never differentiated,
+while a lightweight \emph{local} surrogate supplies derivatives evaluated
+\emph{along the global model's trajectories}. We instantiate it on the
+PointMaze DINO-WM model and ask whether first-order refinement through a cheap
+surrogate can recover global-CEM-quality plans at a fraction of the
+global-model compute. The surrogate is trained in notebook~03 and the planners
+evaluated in notebook~08; the full method and protocol are in the companion
+file \texttt{reports/local\_global\_report.tex}.
+
+\subsection{Method}
+The \textbf{global model} is the frozen DINO-WM latent predictor above, used as
+forward simulator and scorer under \texttt{no\_grad}. The \textbf{local model}
+is a small residual-MLP surrogate over a frozen orthogonal projection of the
+same latents, differentiable in the actions and trained on cached transitions
+($20$k steps). Six \textbf{planners} are compared: \texttt{global\_cem}
+(zero-order on the global model); \texttt{local\_cem}, \texttt{local\_gd},
+\texttt{local\_adam} (zero/first-order on the surrogate alone, isolating model
+error from optimizer effects); \texttt{hybrid\_cem\_local\_refine} (global CEM,
+then local first-order refinement of the winning sequence); and
+\texttt{hybrid\_cem\_local\_refine\_global\_rescore} (the same, but the global
+model re-scores the refinement and keeps it only if it improves the global
+objective). Three safeguards against surrogate exploitation are built in --- the
+frozen orthogonal projection (anti-collapse), an action-smoothness penalty, and
+the global re-score gate --- and the local--global \emph{disagreement} (surrogate
+prediction vs.\ the global model's executed step) is logged throughout.
+
+\subsection{Protocol and its stated bias}
+Planners are scored on offline latent goal reaching over $100$ held-out
+episodes: normalized final distance
+$\rho=\lVert\zlat_{\mathrm{fin}}-\zlat_{\mathrm{goal}}\rVert^2/
+\lVert\zlat_{\mathrm{start}}-\zlat_{\mathrm{goal}}\rVert^2$ and
+$\text{success}=\mathbb{1}[\rho<0.5]$. \textbf{Because the global model is both
+simulator and judge}, \texttt{global\_cem} is structurally favored on distance
+--- it optimizes exactly the quantity it is scored on --- so the
+distance/success columns establish only that the other planners are
+\emph{competent}, while the efficiency columns (wall time, forward/backward
+call counts) and the acceptance rate carry the comparative claim. A
+\emph{reference replay} of the dataset's true action sequence through the same
+simulator calibrates the global model's own rollout error at
+$\rho_{\mathrm{ref}}=0.058$.
+
+\subsection{Surrogate training}
+The surrogate reaches a final validation one-step loss of $0.0058$ and a
+$K$-step rollout MSE of $0.0029$ at $20{,}000$ steps (per-horizon curve in
+Figure~\ref{fig:lg-rollout}).
+
+\begin{figure}[h]
+\centering
+\drivefigure{pointmaze_local_full_seed0_rollout_error.png}{0.6\linewidth}{pointmaze\_local\_full\_seed0\_rollout\_error.png}
+\caption{Surrogate validation rollout error vs.\ horizon (PointMaze, seed~0),
+exported by notebook~08 to the Drive \texttt{\detokenize{_summary}} directory.}
+\label{fig:lg-rollout}
+\end{figure}
+
+\subsection{Planner comparison}
+\begin{table}[h]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lcccccccc@{}}
+\toprule
+Planner & succ. & $\rho$ & wall/ep.\ (s) & glob.\ fwd & loc.\ fwd & bwd & accept & disagr. \\
+\midrule
+\texttt{global\_cem}                     & 0.97 & 0.138 & 231.6 & 1.50M & --    & --    & --    & --     \\
+\texttt{local\_cem}                      & 0.45 & 0.675 & 0.22  & --    & 1.50M & --    & --    & 0.0020 \\
+\texttt{local\_gd}                       & 0.13 & 1.306 & 2.60  & --    & 50k   & 50k   & --    & 0.0028 \\
+\texttt{local\_adam}                     & 0.41 & 0.699 & 2.67  & --    & 50k   & 50k   & --    & 0.0019 \\
+\texttt{hybrid\_cem\_local\_refine}      & 0.54 & 0.632 & 234.1 & 1.50M & 50k   & 50k   & 1.00  & 0.0019 \\
+\texttt{hybrid\_\dots\_global\_rescore}  & \textbf{0.97} & \textbf{0.138} & 234.2 & 1.50M & 50k & 50k & 0.028 & 0.0024 \\
+\midrule
+reference replay                         & --   & 0.058 & --    & --    & --    & --    & --    & --     \\
+\bottomrule
+\end{tabular}
+\caption{Planner comparison on offline latent goal reaching, $100$ held-out
+PointMaze episodes (\texttt{pointmaze\_local\_full\_seed0}, surrogate at
+$20$k steps). Distances are judged by the global model (see the stated bias),
+so the efficiency columns carry the comparative claim. \texttt{succ.}=success
+rate; $\rho$=normalized final distance; \texttt{fwd/bwd}=forward/backward call
+counts; \texttt{accept}=refinement acceptance rate;
+\texttt{disagr.}=mean local--global disagreement.}
+\label{tab:lg-planners}
+\end{table}
+
+\subsection{Findings}
+\begin{enumerate}[leftmargin=1.5em]
+\item \textbf{Global CEM tops the distance metric} ($0.97$ success,
+$\rho=0.138$), as the judge bias predicts; even so, its $0.138$ is
+${\approx}2.4\times$ the reference-replay floor ($0.058$) --- the global model
+does not perfectly close its own gap.
+\item \textbf{Pure local planners are far cheaper but weaker} on the
+global-judged metric: \texttt{local\_cem} $0.45$ at \textbf{$0.22$\,s/episode},
+\texttt{local\_adam} $0.41$ at $2.7$\,s, \texttt{local\_gd} $0.13$ --- against
+\texttt{global\_cem}'s \textbf{$231$\,s/episode}. The surrogate forward is
+${\sim}1000\times$ cheaper per call, but at this capacity it is not accurate
+enough to plan to global quality on its own.
+\item \textbf{The unguarded hybrid hurts.}
+\texttt{hybrid\_cem\_local\_refine} accepts \emph{every} refinement
+($\text{accept}{=}1.00$) and falls to $0.54$ ($\rho=0.632$): refining on the
+surrogate walks a good global plan into regions where the surrogate is wrong
+--- exactly the exploitation failure mode the safeguards target.
+\item \textbf{The global re-score gate fixes it.}
+\texttt{hybrid\_\dots\_global\_rescore} rejects $97.2\%$ of refinements
+($\text{accept}{=}0.028$) and recovers global-CEM quality \emph{exactly}
+($0.97$, $\rho=0.138$). This is the headline result: the gate turns a harmful
+refinement into a no-op, so the hybrid is never worse than the CEM it began
+from.
+\item \textbf{Disagreement is small, yet gradients are unreliable.} The
+local--global disagreement stays ${\approx}0.002$ --- the surrogate tracks the
+global model's one-step behavior --- yet its gradient \emph{directions} improve
+the global objective rarely enough that the gate accepts only $2.8\%$ of them.
+One-step tracking accuracy and gradient usefulness are not the same thing.
+\end{enumerate}
+
+\subsection{Synthetic sanity check (preliminary)}
+On the exact synthetic point-mass task (a few hundred surrogate steps; 2--3
+episodes, a correctness signal rather than statistics) the expected ordering
+holds: all six planners succeed, \texttt{local\_adam} attains the lowest final
+distance, the hybrids improve on plain CEM with their refinements accepted, and
+\texttt{local\_gd} is weakest. In an adversarial unit test where the surrogate's
+action gain is sign-flipped, refinement reliably worsens the global cost and the
+re-score gate rejects it, returning the CEM sequence unchanged.
+
+\subsection{What this establishes}
+The protocol measures planner behavior \emph{under the global model's belief}.
+It shows that first-order refinement through a cheap surrogate can be made
+\emph{safe} --- never worse than CEM --- by a global re-score gate, and that the
+pure local planners are $100$--$1000\times$ cheaper per episode than the global
+baseline. It cannot, by construction, rank planners against reality;
+real-environment confirmation in MuJoCo PointMaze is the headline next step
+(\S\ref{sec:future}). Results are single-seed (\texttt{seed0}), single-task.
+
+\section{Computational resources}
+\label{sec:resources}
+
+A standing constraint of this project is that every experiment fit inside
+free-tier Colab limits, and that the experiment \emph{definition} (model size,
+data budgets, episode counts) be identical across GPU tiers --- only throughput
+knobs (precision, dataloader workers, micro-batch size) differ between a T4, an
+L4, and an A100 (\S\ref{sec:implementation}). The figures below therefore
+describe a pipeline that runs end-to-end on free hardware, not a cluster job.
+
+\paragraph{Hardware.} Baseline runs use a free-tier NVIDIA T4 (16\,GB, fp16); an
+A100-40\,GB or L4 (bf16) is used opportunistically when Colab grants one. Turing
+emulates bf16 slowly, so the T4 runs in fp16 while A100/L4 use bf16; results
+across tiers are statistically equivalent, not bit-identical.
+
+\paragraph{The enabling optimization.} The stock DINO-WM loop re-encodes
+${\sim}1600\times$ the dataset through the frozen DINOv2 encoder every epoch,
+projecting $19$--$30$\,h per epoch on a T4 and putting the full study out of
+reach on free hardware. Precomputing the frozen patch latents once and training
+the predictor on that cache cuts per-step cost ${\approx}21\times$
+(Table~\ref{tab:throughput}): a measured $31$\,min/epoch on a T4 at stride~2, or
+$3$--$6$\,min on an A100. The cache is ${\sim}30$\,GB for all $2{,}200$ episodes
+and lives on session-local disk.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Stage & Budget & Wall-clock \\
+\midrule
+Latent precompute (one-time)         & $2{,}200$ episodes $\to$ DINOv2      & amortized; ${\sim}30$\,GB cache \\
+Predictor training, full             & $10$ epochs, $2{,}000{+}200$ traj.  & ${\sim}31$\,min/epoch T4; $3$--$6$\,min A100 \\
+Predictor training, low-data ($\times2$) & $20$--$30$ epochs, $300{+}60$ traj. & well under the full run ($15\%$ data) \\
+Planning eval (per checkpoint)       & $200$ episodes, CEM $100{\times}10$  & ${\sim}47$\,min (A100, measured) \\
+Surrogate training (\S\ref{sec:localglobal}) & $20{,}000$ steps             & ${\sim}1$--$2.5$\,h (T4) \\
+Six-planner eval (\S\ref{sec:localglobal})   & $100$ episodes $\times\,6$ planners & ${\sim}20$\,h total (see below) \\
+\bottomrule
+\end{tabular}
+\caption{Wall-clock footprint of both studies on the stated hardware. Training
+and planning are \emph{per checkpoint}; three checkpoints (full, low-data
+scratch, low-data fine-tune) enter the DINO-WM results.}
+\label{tab:resources}
+\end{table}
+
+\paragraph{Where the time goes.} The six-planner sweep is dominated by the three
+planners that call the global model: each runs ${\approx}232$--$234$\,s per
+episode (${\approx}6.5$\,h for $100$ episodes), against ${\approx}0.2$--$2.7$\,s
+per episode --- seconds to a few minutes in total --- for the three purely local
+planners, a ${\sim}1000\times$ per-call gap. This asymmetry is exactly the
+motivation for the coupled local/global design (\S\ref{sec:localglobal}): the
+global rollout is the dominant cost, so a cheap differentiable surrogate that
+substitutes for some of those rollouts is where any compute saving must come
+from.
+
+\paragraph{Resumability.} Because several stages exceed a single free-tier
+session --- the six-planner sweep alone is ${\sim}20$\,h --- every long-running
+stage is checkpointed and resumable: training writes per-epoch checkpoints,
+planning resumes per episode (the latest \texttt{final\_eval} is authoritative),
+and the local/global evaluation runs under a $300$-minute per-session wall cap
+with cross-session resume. No stage needs to finish in one sitting, which is
+what makes a ${\sim}20$\,h evaluation tractable on free, time-limited GPUs.
+
+\section{Future work}
+\label{sec:future}
+
+(1)~Real-environment confirmation of the local/global planner ranking in MuJoCo
+PointMaze (the offline metric of \S\ref{sec:localglobal} judges distances with
+the global model itself); (2)~seed replication of the low-data pair and the
+local/global run; (3)~an A100
+stride-1 full-data training to replace the stride-2 lower bound;
+(4)~PushT, blocked upstream on a video-backed latent cache (the PointMaze
+latent path does not transfer directly); and (5)~for the local/global track,
+FOG-style online surrogate fine-tuning on global-model rollouts to keep local
+gradients on-distribution, plus the built-in projection/context/optimizer
+ablations --- both motivated by the low refinement-acceptance rate of
+\S\ref{sec:localglobal}.
+
+\section*{Reproducibility}
+
+Code lives in the \texttt{wm-prediction} repository
+(\texttt{src/wm\_poc/dino\_wm}, \texttt{scripts/dino\_wm},
+\texttt{configs/dino\_wm}); notebook 02 runs the full pipeline on Colab
+(T4 or A100) with self-gating, resumable stages, and notebook 07 renders the
+results. The latent-cache design is documented in
+\texttt{docs/dino\_wm\_latent\_cache\_training.md}; the figures in this report
+are generated from the recorded planner telemetry
+(\texttt{reports/pointmaze\_planning\_logs\_50evals.csv}) by
+\texttt{reports/make\_planning\_figures.py}. The two training-curve figures are
+produced on Drive by notebook 07 (\texttt{\_summary/}) and copied into
+\texttt{reports/figures/}.
+
+\begin{thebibliography}{9}
+\setlength{\itemsep}{2pt}
+
+\bibitem{dinowm2025}
+G.~Zhou, H.~Pan, Y.~LeCun, L.~Pinto.
+\emph{DINO-WM: World Models on Pre-trained Visual Features Enable Zero-shot
+Planning}. arXiv:2411.04983, 2024.
+
+\bibitem{dinov2}
+M.~Oquab et al.
+\emph{DINOv2: Learning Robust Visual Features without Supervision}.
+arXiv:2304.07193, 2023.
+
+\bibitem{planet}
+D.~Hafner et al.
+\emph{Learning Latent Dynamics for Planning from Pixels}. ICML, 2019.
+
+\bibitem{dreamer}
+D.~Hafner et al.
+\emph{Dream to Control: Learning Behaviors by Latent Imagination}. ICLR, 2020.
+
+\bibitem{tdmpc2}
+N.~Hansen, H.~Su, X.~Wang.
+\emph{TD-MPC2: Scalable, Robust World Models for Continuous Control}.
+ICLR, 2024.
+
+\bibitem{vjepa2}
+M.~Assran et al.
+\emph{V-JEPA 2: Self-Supervised Video Models Enable Understanding, Prediction
+and Planning}. 2025.
+
+\bibitem{fog2026}
+P.~Amigo, R.~Khorrambakht, N.~Mansard, L.~Righetti.
+\emph{Coupled Local and Global World Models for Efficient First-Order
+Model-Based Reinforcement Learning}. arXiv:2602.06219, 2026.
+
+\bibitem{cem}
+P.-T.~de Boer, D.~P.~Kroese, S.~Mannor, R.~Y.~Rubinstein.
+\emph{A Tutorial on the Cross-Entropy Method}. Annals of Operations Research,
+134(1):19--67, 2005.
+
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,41 @@
+extends: base.yaml
+run_name: smoke_pointmaze_latent_seed0
+
+# End-to-end crash test of the exact pipeline the full no-decoder run uses,
+# shrunk to ~10-15 min: upstream patches, DINO hub download, latent
+# precompute (20 episodes), latent-slice training for one epoch, checkpoint
+# write, and a tiny CEM planning eval that loads the checkpoint and drives
+# the real encoder on env observations.
+dataset:
+  env: point_maze
+  max_train_trajectories: 16
+  max_val_trajectories: 4
+
+training:
+  seed: 0
+  epochs: 1
+  batch_size: 4
+  num_workers: 2
+  max_wall_minutes: 20
+
+planning:
+  enabled: true
+  n_evals: 2
+  opt_steps: 2
+  samples: 8
+  max_wall_minutes: 10
+
+# Same training shape as the full run: no decoder, latent cache on
+# (features.cache_enabled is inherited true from base.yaml).
+upstream:
+  train_overrides:
+    - has_decoder=false
+    - model.train_decoder=false
+    - ++training.num_reconstruct_samples=0
+
+metadata:
+  notes: "Latent-path smoke: crash-tests patches, precompute, latent training, checkpointing, and planning end to end."
+  tags:
+    - smoke
+    - latent-cache
+    - nodecoder

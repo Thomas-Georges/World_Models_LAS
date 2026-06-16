@@ -1,0 +1,109 @@
+track: dino_wm
+run_name: null
+external_repo: ${oc.env:DINO_WM_REPO,/content/drive/MyDrive/wm_poc/external_repos/dino_wm}
+
+upstream:
+  train_config_name: train.yaml
+  plan_config_name: plan.yaml
+  precompute_config_name: train.yaml
+  train_overrides: []
+  plan_overrides: []
+  precompute_overrides: []
+
+execution:
+  dry_run_default: true
+  require_env_flag: RUN_DINO_WM
+  device: cuda
+  num_gpus: 1
+  gpu_type_target: A100
+
+dataset:
+  root: ${oc.env:DINO_WM_DATA_ROOT,/content/drive/MyDrive/wm_poc/data/dino_wm}
+  env: point_maze
+  split_seed: 0
+  train_fraction: 0.90
+  max_train_trajectories: 2000
+  max_val_trajectories: 200
+  checksum_mode: metadata
+  split_manifest: null
+  # Subsample slice start positions in the latent-cache slicer. 1 reproduces
+  # the upstream window set; 2 halves the optimizer steps per epoch.
+  slice_stride: 1
+
+features:
+  encoder: dinov2_patch
+  encoder_checkpoint: null
+  freeze_encoder: true
+  cache_enabled: true
+  # The full PointMaze latent cache is ~30 GB, so it defaults to fast local
+  # disk (recomputed per Colab session in ~10-20 min). Point
+  # DINO_WM_FEATURE_CACHE at a Drive path only if you have the space there.
+  cache_dir: ${oc.env:DINO_WM_FEATURE_CACHE,/content/wm_poc_latent_cache}
+  image_size: 224
+  precompute_batch_size: 128
+  allow_incomplete_cache: false
+
+model:
+  num_hist: 3
+  frameskip: 5
+  predictor_depth: 6
+  action_emb_dim: 10
+  causal_mask: true
+
+training:
+  resume: true
+  seed: 0
+  epochs: 60
+  batch_size: 32
+  num_workers: 4
+  predictor_lr: 5.0e-5
+  action_encoder_lr: 5.0e-4
+  decoder_lr: 3.0e-4
+  eval_every_epochs: 5
+  save_every_epochs: 1
+  save_every_steps: 0
+  max_wall_minutes: 220
+
+finetuning:
+  enabled: false
+  init_from: null
+  load:
+    predictor: true
+    action_encoder: true
+    decoder: false
+    optimizer: false
+  strict: true
+  reset_epoch: true
+  freeze:
+    visual_encoder: true
+    predictor: false
+    action_encoder: false
+    decoder: true
+  predictor_lr: 1.0e-5
+  action_encoder_lr: 1.0e-4
+  decoder_lr: 0.0
+  warmup_epochs_action_encoder_only: 2
+  epochs: 20
+  early_stop:
+    metric: val/loss_pred_hstep
+    patience: 5
+
+planning:
+  enabled: true
+  planner: cem
+  n_evals: 50
+  goal_H: 5
+  goal_source: random_state
+  opt_steps: 10
+  samples: 100
+  max_wall_minutes: 60
+
+artifacts:
+  log_root: ${oc.env:DINO_LOG_ROOT,/content/drive/MyDrive/wm_poc/logs/dino_wm}
+  ckpt_root: ${oc.env:DINO_CKPT_ROOT,/content/drive/MyDrive/wm_poc/checkpoints/dino_wm}
+  figure_dir: ${oc.env:DINO_FIGURE_DIR,/content/drive/MyDrive/wm_poc/figures/dino_wm}
+  video_dir: ${oc.env:DINO_VIDEO_DIR,/content/drive/MyDrive/wm_poc/videos/dino_wm}
+
+metadata:
+  notes: ""
+  tags: []

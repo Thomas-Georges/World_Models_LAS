@@ -1,0 +1,56 @@
+# CPU-only end-to-end smoke on the synthetic point-mass task (run_smoke.sh).
+# Generates its own tiny latent cache; no real data, no GPU, ~1-2 minutes.
+extends: base.yaml
+run_name: smoke_synthetic
+device: cpu
+task: synthetic
+
+paths:
+  run_root: ${oc.env:LG_SMOKE_ROOT,runs/local_global}
+  latent_cache_dir: ${oc.env:LG_SMOKE_ROOT,runs/local_global}/_synthetic/latent_cache
+  action_data_dir: ${oc.env:LG_SMOKE_ROOT,runs/local_global}/_synthetic/action_data
+
+global_model:
+  source: synthetic
+  model_name: ""
+  encoder: synthetic_linear
+  image_size: 0
+  latent_patches: 16
+  latent_dim: 32
+  frameskip: 2
+  num_hist: 1
+  proprio_dim: 0
+
+local_model:
+  local_dim: 32
+  hidden_dim: 64
+  num_layers: 2
+  context_len: 2
+  rollout_steps: 3
+
+training:
+  batch_size: 16
+  max_steps: 300
+  val_every: 100
+  save_every: 100
+  log_every: 20
+  num_workers: 0
+  max_wall_minutes: 10
+
+planning:
+  horizon: 4
+  goal_steps: 4
+  cem_population: 32
+  cem_elites: 6
+  cem_iters: 3
+  gd_iters: 30
+  gd_lr: 0.1
+
+evaluation:
+  num_episodes: 3
+  success_threshold: 0.5
+
+smoke:
+  use_synthetic_latents_if_missing: true
+  synthetic_episodes: 12
+  synthetic_episode_length: 64

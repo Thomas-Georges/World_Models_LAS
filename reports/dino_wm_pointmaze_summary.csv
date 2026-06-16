@@ -1,0 +1,9 @@
+track,run_name,seed,checkpoint,task,train_rollouts,epochs,eval_episodes,metric_name,metric_value,source_log,source_notebook,notes
+II,pointmaze_full_nodecoder_t4_fp16_b32_stride2_seed0,0,random_init,pointmaze,2000,10,200,planning_success_rate,0.23,reports/pointmaze_planning_logs_200evals.csv,notebooks/07_dino_wm_results.ipynb,T4 stride-2 (lower bound); Wilson half-width approx 0.06
+II,pointmaze_lowdata_scratch_a100_seed0,0,random_init,pointmaze,300,30,200,planning_success_rate,0.10,reports/pointmaze_planning_logs_200evals.csv,notebooks/07_dino_wm_results.ipynb,low-data scratch
+II,pointmaze_lowdata_finetune_a100_seed0,0,full_nodecoder_checkpoint,pointmaze,300,20,200,planning_success_rate,0.275,reports/pointmaze_planning_logs_200evals.csv,notebooks/07_dino_wm_results.ipynb,low-data fine-tune; init from full run predictor + action/proprio encoders
+II,pointmaze_lowdata_scratch_a100_seed0,0,random_init,pointmaze,300,30,200,val_hstep_latent_mse,0.021,drive:scratch/loss_logs,notebooks/07_dino_wm_results.ipynb,final validation h-step loss (same order of magnitude as fine-tune)
+II,pointmaze_lowdata_finetune_a100_seed0,0,full_nodecoder_checkpoint,pointmaze,300,20,200,val_hstep_latent_mse,0.012,drive:finetune/loss_logs,notebooks/07_dino_wm_results.ipynb,reaches scratch's converged level at epoch 1
+II,finetune_vs_scratch,0,,pointmaze,300,,200,two_proportion_z,4.5,derived,notebooks/07_dino_wm_results.ipynb,episode-level Bernoulli approximation (p<1e-5); not run-level (all seed 0)
+II,finetune_vs_full,0,,pointmaze,300,,200,two_proportion_p,0.30,derived,notebooks/07_dino_wm_results.ipynb,0.275 vs 0.23 statistically indistinguishable
+II,latent_cache,0,,pointmaze,,,,throughput_speedup_x,21,reports/world_models_report.tex,notebooks/02_dino_wm_foundation.ipynb (cleared; see artifact_manifest.json),stock >30h/epoch -> ~58min/epoch (stride1) / 31min (stride2) on T4

@@ -1,0 +1,8 @@
+track: r2dreamer
+external_repo: r2dreamer
+env: dmc_proprio
+source_task: dmc_walker_walk
+target_task: dmc_walker_run
+model_rep_loss: dreamer
+bootstrap_only: true
+notes: "Template only. Do not run training during repository bootstrap."

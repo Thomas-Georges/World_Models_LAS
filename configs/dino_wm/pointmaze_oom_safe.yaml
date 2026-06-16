@@ -1,0 +1,39 @@
+extends: pointmaze_scratch_a100.yaml
+run_name: pointmaze_oom_safe_seed0
+
+# Keep this small until one full epoch completes without CUDA OOM.
+dataset:
+  max_train_trajectories: 64
+  max_val_trajectories: 8
+
+training:
+  batch_size: 2
+  epochs: 2
+  save_every_epochs: 5
+  save_every_steps: 0
+  max_wall_minutes: 60
+
+# Do not run planner while debugging train memory.
+planning:
+  enabled: false
+
+# This config is the online-encoding memory diagnostic; keep it off the
+# precomputed-latent path so it still exercises the DINO forward pass.
+features:
+  cache_enabled: false
+
+# These are passed directly to upstream Hydra.
+# has_decoder=false is the main peak-memory reduction for the first safe run.
+upstream:
+  train_overrides:
+    - has_decoder=false
+    - model.train_decoder=false
+    - ++training.num_reconstruct_samples=0
+    - env.num_workers=0
+
+metadata:
+  notes: "OOM remediation probe: small predictor-only PointMaze train run."
+  tags:
+    - pointmaze
+    - oom-safe
+    - nodecoder

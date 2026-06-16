@@ -1,0 +1,112 @@
+# Base config for the local/global planning track (schema + PointMaze defaults).
+# Conventions match configs/dino_wm: single-parent `extends:` inheritance and
+# ${oc.env:VAR,default} environment placeholders. Heavy artifacts go to Drive.
+track: local_global
+run_name: ""          # empty = auto local_global_<task>_<utc-stamp>
+seed: 0
+device: auto          # auto | cpu | cuda
+
+task: point_maze
+
+paths:
+  run_root: ${oc.env:LG_RUN_ROOT,/content/drive/MyDrive/wm_poc/logs/local_global}
+  dino_wm_repo: ${oc.env:DINO_WM_REPO,/content/drive/MyDrive/wm_poc/external_repos/dino_wm}
+  data_root: ${oc.env:DINO_WM_DATA_ROOT,/content/drive/MyDrive/wm_poc/data/dino_wm}
+  latent_cache_root: ${oc.env:DINO_WM_FEATURE_CACHE,/content/wm_poc_latent_cache}
+  # Optional explicit overrides; empty = derived from the roots above
+  # (<latent_cache_root>/<task>/<encoder>_img<image_size> and <data_root>/<task>).
+  latent_cache_dir: ${oc.env:LG_LATENT_CACHE_DIR,}
+  action_data_dir: ${oc.env:LG_ACTION_DATA_DIR,}
+  global_ckpt_root: ${oc.env:DINO_CKPT_ROOT,/content/drive/MyDrive/wm_poc/checkpoints/dino_wm}
+
+global_model:
+  source: dino_wm     # dino_wm | synthetic
+  # Upstream training run that produced the checkpoint (outputs/<model_name>).
+  model_name: ${oc.env:LG_GLOBAL_MODEL_NAME,pointmaze_full_nodecoder_bf16_a100_b32_seed0}
+  model_epoch: ${oc.env:LG_GLOBAL_MODEL_EPOCH,latest}
+  encoder: dinov2_vits14
+  image_size: 224
+  latent_patches: 196
+  latent_dim: 384
+  frameskip: 5        # model-step actions concatenate this many raw env actions
+  num_hist: 3
+  proprio_dim: 4
+  # CEM candidates per predictor forward pass. Pure memory/throughput knob:
+  # candidates are independent, so results are identical at any value.
+  rollout_batch_size: 64
+
+local_model:
+  model_type: residual_mlp        # residual_mlp | gru_residual
+  projection: mean_pool_linear    # mean_pool_linear | grid_pool_linear
+  projection_grid: 4
+  # Frozen (orthogonal) projection by default: a jointly trained projector with
+  # an MSE objective in projected space can collapse. Enable together with
+  # training.lambda_variance > 0 only.
+  projection_trainable: false
+  local_dim: 256
+  hidden_dim: 512
+  num_layers: 3
+  context_len: 2
+  rollout_steps: 3
+  layer_norm: true
+
+training:
+  batch_size: 256
+  max_steps: 20000
+  lr: 0.0003
+  weight_decay: 0.0001
+  val_every: 500
+  save_every: 1000
+  log_every: 50
+  num_workers: 2
+  lambda_rollout: 1.0
+  lambda_one_step: 1.0
+  lambda_delta: 0.1
+  lambda_jacobian: 0.0
+  lambda_variance: 0.0
+  rollout_discount: 1.0
+  max_grad_norm: 10.0
+  max_episodes: 0        # 0 = use every cached episode
+  max_windows: 0         # 0 = use every window
+  val_fraction: 0.1
+  split_seed: 42
+  max_wall_minutes: 600  # per-session wall cap; resume continues across sessions
+
+planning:
+  action_dim: 2          # raw env action dim; per-model-step dim = action_dim * frameskip
+  action_low: [-1.0, -1.0]
+  action_high: [1.0, 1.0]
+  horizon: 5             # model steps planned per MPC round
+  goal_steps: 5          # model steps between start and goal in offline episodes
+  mpc_exec_steps: 1      # model steps executed before replanning
+  cem_population: 300
+  cem_elites: 30
+  cem_iters: 10
+  cem_init_std: 0.5      # in units of half the action range
+  gd_iters: 100
+  gd_lr: 0.05
+  gradient_clip: 10.0
+  action_smoothness: 0.01
+  # Global re-score rejection is selected by planner name (the
+  # hybrid_cem_local_refine_global_rescore entry below); this tolerance tunes it.
+  reject_refine_if_worse_by: 0.05
+
+evaluation:
+  # 100 episodes -> ~+-0.10 95% CI on success rate, a compromise between 50
+  # (too noisy, +-0.14) and 200 (+-0.07, ~2x the runtime). The paired,
+  # near-deterministic efficiency metrics need fewer. Per-episode resume +
+  # the wall cap below carry the sweep across sessions.
+  num_episodes: 100
+  max_wall_minutes: 600   # stop starting new episodes past this; resume continues per episode
+  episode_seed: 0
+  success_threshold: 0.5  # on final/baseline normalized global latent distance
+  planners:
+    - global_cem
+    - local_adam
+    - hybrid_cem_local_refine
+    - hybrid_cem_local_refine_global_rescore
+
+smoke:
+  use_synthetic_latents_if_missing: false
+  synthetic_episodes: 8
+  synthetic_episode_length: 64

@@ -1,0 +1,8 @@
+planner,success_rate,normalized_final_distance,wall_time_per_episode_sec,global_forward_calls,local_forward_calls,backward_steps,acceptance_rate,local_global_disagreement,n_episodes,surrogate_steps,seed,notes
+global_cem,0.97,0.138,231.6,1500000,,,,,100,20000,0,zero-order CEM on the global model; judge-favored on distance
+local_cem,0.45,0.675,0.22,,1500000,,,0.0020,100,20000,0,zero-order CEM on the surrogate alone
+local_gd,0.13,1.306,2.60,,50000,50000,,0.0028,100,20000,0,first-order GD through the surrogate
+local_adam,0.41,0.699,2.67,,50000,50000,,0.0019,100,20000,0,first-order Adam through the surrogate
+hybrid_cem_local_refine,0.54,0.632,234.1,1500000,50000,50000,1.00,0.0019,100,20000,0,unguarded hybrid; accepts every refinement
+hybrid_cem_local_refine_global_rescore,0.97,0.138,234.2,1500000,50000,50000,0.028,0.0024,100,20000,0,bounded-worsening gate (tau=0.05); recovers global-CEM quality
+reference_replay,,0.058,,,,,,,100,,0,dataset true actions replayed through the global model (rollout-error floor)
