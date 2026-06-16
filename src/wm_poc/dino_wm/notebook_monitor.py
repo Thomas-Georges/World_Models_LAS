@@ -398,7 +398,7 @@ def run_dino_with_live_display(
     if interval <= 0:
         raise ValueError("monitor_interval must be greater than 0 seconds.")
 
-    repo = Path(repo_dir or os.environ.get("WM_POC_REPO", "/content/wm-prediction"))
+    repo = Path(repo_dir or os.environ.get("WM_POC_REPO", "/content/World_Models_LAS"))
     if not repo.is_dir():
         raise FileNotFoundError(f"Repository directory does not exist: {repo}")
 

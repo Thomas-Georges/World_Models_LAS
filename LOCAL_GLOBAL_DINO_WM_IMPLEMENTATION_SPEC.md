@@ -1,6 +1,6 @@
 # Local/Global World-Model Planning Implementation Spec
 
-This document is an implementation brief for an agent that will add the local/global world-model experiment track to the existing `wm-prediction` repository. It should follow the same user-facing notebook logic already used by the DINO-WM track: one notebook that can train/test or dispatch experiment commands, and one separate notebook that only visualizes and summarizes results.
+This document is an implementation brief for an agent that will add the local/global world-model experiment track to the existing `World_Models_LAS` repository. It should follow the same user-facing notebook logic already used by the DINO-WM track: one notebook that can train/test or dispatch experiment commands, and one separate notebook that only visualizes and summarizes results.
 
 The implementation target is a practical proof-of-concept, not a full reproduction of the diffusion-based local/global paper. In this repository, the first global model should be the already integrated DINO-WM latent world model, while the local model should be a smaller differentiable surrogate trained on DINO/DINO-WM latents. The goal is to compare:
 

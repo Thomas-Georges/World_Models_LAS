@@ -30,7 +30,7 @@ LATENT_MANIFEST_NAME = "wm_poc_latent_manifest.json"
 LATENT_MANIFEST_FORMAT = "wm_poc_dino_latents_v1"
 
 
-LATENT_DATASET_MODULE_SOURCE = '''"""Latent-cache dataset for DINO-WM (installed by wm-prediction).
+LATENT_DATASET_MODULE_SOURCE = '''"""Latent-cache dataset for DINO-WM (installed by World_Models_LAS).
 
 Marker: WM_POC_DINO_LATENT_DATASET_V1
 
@@ -244,7 +244,7 @@ def load_point_maze_latent_slice_train_val(
 '''
 
 
-PRECOMPUTE_SCRIPT_SOURCE = '''"""Precompute frozen DINO patch latents for DINO-WM (installed by wm-prediction).
+PRECOMPUTE_SCRIPT_SOURCE = '''"""Precompute frozen DINO patch latents for DINO-WM (installed by World_Models_LAS).
 
 Marker: WM_POC_DINO_LATENT_PRECOMPUTE_V1
 

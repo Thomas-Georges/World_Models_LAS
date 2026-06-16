@@ -8,7 +8,7 @@ The goal is to visualize trained checkpoints beyond scalar loss/evaluation curve
 
 ## Current Repository Context
 
-- Repository: `wm-prediction`
+- Repository: `World_Models_LAS`
 - Python package: `wm_poc`
 - Main Drive root: `/content/drive/MyDrive/wm_poc`
 - Existing T4/proprio run folder:

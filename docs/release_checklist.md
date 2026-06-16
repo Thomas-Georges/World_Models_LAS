@@ -40,8 +40,8 @@ for p in sorted(Path("reports").glob("*.csv")):
 PY
 
 # Build + check the release archive (from the committed tree only)
-git archive --format=zip --prefix=wm-prediction/ --output ../wm-prediction-release.zip HEAD
-zipinfo -1 ../wm-prediction-release.zip | \
+git archive --format=zip --prefix=World_Models_LAS/ --output ../World_Models_LAS-release.zip HEAD
+zipinfo -1 ../World_Models_LAS-release.zip | \
   grep -E '(^|/)\.git/|__MACOSX|\.DS_Store|__pycache__|\.pyc$|\.pytest_cache|\.ruff_cache|\.review_pkgs' \
   && echo "ARCHIVE NOT CLEAN" || echo "archive clean"
 ```

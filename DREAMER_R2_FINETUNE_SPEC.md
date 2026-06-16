@@ -305,7 +305,7 @@ If some equivalent files already exist from Step 1, extend them rather than dupl
 All scripts must respect these environment variables and have safe defaults.
 
 ```bash
-export WM_POC_REPO=${WM_POC_REPO:-/content/wm-prediction}
+export WM_POC_REPO=${WM_POC_REPO:-/content/World_Models_LAS}
 export WM_POC_DRIVE_ROOT=${WM_POC_DRIVE_ROOT:-/content/drive/MyDrive/wm_poc}
 
 export WM_POC_DATA_DIR=${WM_POC_DATA_DIR:-$WM_POC_DRIVE_ROOT/data}
@@ -425,20 +425,20 @@ Use placeholders for the GitHub URL.
 ```bash
 cd /content
 
-if [ ! -d wm-prediction ]; then
-  git clone https://github.com/Thomas-Georges/wm-prediction.git
+if [ ! -d World_Models_LAS ]; then
+  git clone https://github.com/Thomas-Georges/World_Models_LAS.git
 fi
 
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 git pull
 
-export WM_POC_REPO=/content/wm-prediction
+export WM_POC_REPO=/content/World_Models_LAS
 ```
 
 ### Cell 5 — clone and install r2dreamer
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 
 bash scripts/r2dreamer/setup_r2dreamer.sh \
   --extras dmc \
@@ -448,7 +448,7 @@ bash scripts/r2dreamer/setup_r2dreamer.sh \
 ### Cell 6 — patch r2dreamer
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 
 python scripts/r2dreamer/patch_checkpoint_loading.py \
   --r2-repo /content/external_repos/r2dreamer
@@ -462,7 +462,7 @@ python scripts/r2dreamer/verify_r2dreamer_patch.py \
 This should run only a tiny test, not a meaningful experiment.
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 
 bash scripts/r2dreamer/run_smoke.sh
 ```
@@ -470,7 +470,7 @@ bash scripts/r2dreamer/run_smoke.sh
 ### Cell 8 — print the three full commands
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 
 python scripts/r2dreamer/build_commands.py \
   --config configs/r2dreamer/three_way_walker_walk_to_run.yaml \
@@ -482,7 +482,7 @@ python scripts/r2dreamer/build_commands.py \
 Manual long-running cell:
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 bash scripts/r2dreamer/run_source_base.sh
 ```
 
@@ -491,7 +491,7 @@ bash scripts/r2dreamer/run_source_base.sh
 Manual long-running cell:
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 bash scripts/r2dreamer/run_target_finetune.sh
 ```
 
@@ -500,14 +500,14 @@ bash scripts/r2dreamer/run_target_finetune.sh
 Manual long-running cell:
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 bash scripts/r2dreamer/run_target_scratch.sh
 ```
 
 ### Cell 12 — parse and plot
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 
 python scripts/r2dreamer/summarize_runs.py \
   --run-root "$WM_POC_LOG_DIR/r2dreamer" \
@@ -1345,7 +1345,7 @@ After Codex finishes this stage, the user should open Colab and run the notebook
 Manual Colab sequence:
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 
 bash scripts/r2dreamer/setup_r2dreamer.sh \
   --extras dmc \

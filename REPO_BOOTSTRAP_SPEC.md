@@ -7,7 +7,7 @@ The goal is **not** to train or run any model yet. The goal is to create a clean
 Working project name:
 
 ```text
-wm-prediction
+World_Models_LAS
 ```
 
 Core project idea:
@@ -89,7 +89,7 @@ The bootstrap stage should create the scaffolding that makes those future steps 
 Codex should create this repository structure:
 
 ```text
-wm-prediction/
+World_Models_LAS/
   README.md
   AGENTS.md
   REPO_BOOTSTRAP_SPEC.md
@@ -167,7 +167,7 @@ Use these environment variables everywhere.
 
 ```bash
 # Local GitHub repo checked out in Colab.
-export WM_POC_REPO=/content/wm-prediction
+export WM_POC_REPO=/content/World_Models_LAS
 
 # Persistent Google Drive root.
 export WM_POC_DRIVE_ROOT=/content/drive/MyDrive/wm_poc
@@ -188,7 +188,7 @@ The repository should include `configs/paths.env.example` with these variables.
 The active Git checkout should usually live on the Colab local disk:
 
 ```text
-/content/wm-prediction
+/content/World_Models_LAS
 ```
 
 Large persistent files should live on Drive:
@@ -502,8 +502,8 @@ These commands are templates for future Colab runs. They should not be run durin
 
 ```bash
 cd /content
-git clone https://github.com/Thomas-Georges/wm-prediction.git
-cd wm-prediction
+git clone https://github.com/Thomas-Georges/World_Models_LAS.git
+cd World_Models_LAS
 ```
 
 ## 2. Mount Drive in Colab
@@ -721,7 +721,7 @@ Code cell:
 ```python
 import os
 
-os.environ["WM_POC_REPO"] = "/content/wm-prediction"
+os.environ["WM_POC_REPO"] = "/content/World_Models_LAS"
 os.environ["WM_POC_DRIVE_ROOT"] = "/content/drive/MyDrive/wm_poc"
 os.environ["WM_POC_DATA_DIR"] = "/content/drive/MyDrive/wm_poc/data"
 os.environ["WM_POC_CKPT_DIR"] = "/content/drive/MyDrive/wm_poc/checkpoints"
@@ -758,13 +758,13 @@ set -e
 
 cd /content
 
-if [ ! -d wm-prediction ]; then
-  git clone https://github.com/Thomas-Georges/wm-prediction.git
+if [ ! -d World_Models_LAS ]; then
+  git clone https://github.com/Thomas-Georges/World_Models_LAS.git
 else
-  echo "Repository already exists at /content/wm-prediction"
+  echo "Repository already exists at /content/World_Models_LAS"
 fi
 
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 git status --short
 ```
 
@@ -775,7 +775,7 @@ Code cell:
 ```bash
 %%bash
 set -e
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 
 python scripts/verify_environment.py --cpu-only
 python scripts/verify_drive_layout.py --drive-root /content/drive/MyDrive/wm_poc
@@ -791,7 +791,7 @@ Code cell:
 %%bash
 set -e
 
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 
 bash scripts/clone_external_repos.sh \
   --external-root /content/drive/MyDrive/wm_poc/external_repos
@@ -1290,7 +1290,7 @@ After Codex creates the repo scaffold and you merge or accept the changes:
 Use the GitHub/Colab URL pattern:
 
 ```text
-https://colab.research.google.com/github/Thomas-Georges/wm-prediction/blob/main/notebooks/00_colab_setup.ipynb
+https://colab.research.google.com/github/Thomas-Georges/World_Models_LAS/blob/main/notebooks/00_colab_setup.ipynb
 ```
 
 Replace the GitHub path if using a fork.

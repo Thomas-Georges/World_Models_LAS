@@ -6,8 +6,8 @@ These commands are templates for future Colab runs. They should not be run durin
 
 ```bash
 cd /content
-git clone https://github.com/Thomas-Georges/wm-prediction.git
-cd wm-prediction
+git clone https://github.com/Thomas-Georges/World_Models_LAS.git
+cd World_Models_LAS
 ```
 
 If you fork this repository, replace the GitHub URL with your fork.
@@ -45,12 +45,12 @@ Do not run until dependencies are installed and the checkpoint patch is verified
 
 The R2-Dreamer notebook is self-contained. It mounts Drive, defines paths, and ensures the runtime repo exists before running these commands.
 
-If the repository is private, the notebook clone cell will ask for a GitHub username and personal access token. Do not paste tokens into committed files.
+The notebook clone cell pulls the public repository over HTTPS; no GitHub credentials are required.
 
 Setup:
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 
 bash scripts/r2dreamer/setup_r2dreamer.sh \
   --extras dmc \
@@ -67,7 +67,7 @@ python scripts/r2dreamer/verify_r2dreamer_patch.py \
 Print smoke/source/fine-tune/scratch commands without running:
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 python scripts/r2dreamer/build_commands.py --dry-run
 ```
 
@@ -100,7 +100,7 @@ Run the tiny smoke test manually:
 The smoke command should print or execute with `env.env_num=1`, `env.eval_episode_num=0`, `trainer.eval_episode_num=0`, and `WM_POC_DMC_DISABLE_IMAGE_RENDER=true`.
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 export RUN_TRAINING=1
 bash scripts/r2dreamer/run_smoke.sh
 ```
@@ -108,7 +108,7 @@ bash scripts/r2dreamer/run_smoke.sh
 Run the three required comparison runs manually:
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 export RUN_TRAINING=1
 bash scripts/r2dreamer/run_source_base.sh
 bash scripts/r2dreamer/run_target_finetune.sh

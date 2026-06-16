@@ -58,7 +58,7 @@ def human_size(size: int | None) -> str:
 
 
 def read_json(url: str) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"User-Agent": "wm-prediction-dino-wm-data/1.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "World_Models_LAS-dino-wm-data/1.0"})
     with urllib.request.urlopen(request, timeout=60) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -127,7 +127,7 @@ def download_file(url: str, output: Path, expected_size: int | None, force: bool
     if part.exists():
         part.unlink()
 
-    request = urllib.request.Request(url, headers={"User-Agent": "wm-prediction-dino-wm-data/1.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "World_Models_LAS-dino-wm-data/1.0"})
     started = time.monotonic()
     copied = 0
     next_progress = PROGRESS_INTERVAL_BYTES

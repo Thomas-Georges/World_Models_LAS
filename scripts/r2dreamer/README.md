@@ -7,7 +7,7 @@ They do not vendor external code into this repository. Training scripts are guar
 Default Colab locations:
 
 ```bash
-export WM_POC_REPO=/content/wm-prediction
+export WM_POC_REPO=/content/World_Models_LAS
 export WM_POC_DRIVE_ROOT=/content/drive/MyDrive/wm_poc
 export WM_POC_EXTERNAL_REPOS=/content/external_repos
 export R2DREAMER_REPO=/content/external_repos/r2dreamer
@@ -157,7 +157,7 @@ export R2_FIGURE_DIR=/content/drive/MyDrive/wm_poc/figures/r2dreamer/walker_walk
 
 `RUN_R2_VISUALIZATIONS=1` is used by the notebook command runner. Direct script commands execute immediately, but keeping the variable in the environment is harmless and makes the notebook behavior explicit.
 
-If the notebook reports a missing `/content/wm-prediction/...` path, run the notebook section `Update repository in Colab` first. It clones or pulls the repo inside Colab and prompts for a GitHub PAT only if the repository cannot be read anonymously.
+If the notebook reports a missing `/content/World_Models_LAS/...` path, run the notebook section `Update repository in Colab` first. It clones or pulls the public repo inside Colab over HTTPS.
 
 If it reports missing `/content/external_repos/r2dreamer`, run the next notebook section, `Update upstream R2-Dreamer checkout`. That cell only clones or updates the upstream repo; it does not install dependencies, train, or touch checkpoints.
 
@@ -204,9 +204,9 @@ os.environ["INSTALL_OSMESA_PACKAGES"] = "1"
 The equivalent manual Colab cell is:
 
 ```bash
-cd /content/wm-prediction
+cd /content/World_Models_LAS
 git pull
-export WM_POC_REPO=/content/wm-prediction
+export WM_POC_REPO=/content/World_Models_LAS
 test -f scripts/r2dreamer/render_policy_rollouts.py
 ```
 

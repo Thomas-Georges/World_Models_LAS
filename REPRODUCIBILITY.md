@@ -65,5 +65,5 @@ run-metadata archives) before reproducing numbers; see the lockfile header.
 Build a clean archive from tracked files only (no `.git`, caches, or OS cruft):
 
 ```bash
-git archive --format=zip --output ../wm-prediction-release.zip HEAD
+git archive --format=zip --output ../World_Models_LAS-release.zip HEAD
 ```

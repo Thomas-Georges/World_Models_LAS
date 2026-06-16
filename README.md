@@ -111,8 +111,8 @@ python scripts/r2dreamer/build_commands.py --dry-run
 bash scripts/r2dreamer/run_smoke.sh
 ```
 
-If the GitHub repository is private, the notebooks prompt for a fine-grained,
-read-only personal access token when cloning into the Colab runtime.
+The notebooks clone the public GitHub repository over HTTPS into the Colab
+runtime; no GitHub credentials are required.
 
 ## Run presets (Track I)
 

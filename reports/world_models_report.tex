@@ -33,7 +33,7 @@
 Transfer and Planning with R2-Dreamer and DINO-WM\\
 under a Commodity-GPU Budget}
 \author{Thomas Georges\thanks{Engineering and experiment automation developed with
-Claude (Anthropic) in the \texttt{wm-prediction} repository. Track~I code:
+Claude (Anthropic) in the \texttt{World\_Models\_LAS} repository. Track~I code:
 \texttt{scripts/r2dreamer}, \texttt{configs/r2dreamer}; Tracks~II--III code:
 \texttt{src/wm\_poc/dino\_wm}, \texttt{src/wm\_poc/local\_global}. Every number
 and figure is read from the committed outputs of the results notebooks
@@ -96,7 +96,7 @@ against it produces behavior that succeeds in the real environment. Two design
 questions dominate the cost of getting there: \emph{what representation does the
 model's dynamics operate over}, and \emph{how is that model adapted to a new
 task}. This report collects the two experimental tracks of the
-\texttt{wm-prediction} repository, which were built to probe exactly those two
+\texttt{World\_Models\_LAS} repository, which were built to probe exactly those two
 questions from opposite ends, and unifies them into a single study.
 
 \subsection{The representation spectrum, and the logic of the two tracks}
@@ -1103,7 +1103,7 @@ should stress both the surrogate and the re-score safeguard most.
 \section*{Reproducibility}
 
 {\sloppy
-Code lives in the \texttt{wm-prediction} repository. \textbf{Track~I:}
+Code lives in the \texttt{World\_Models\_LAS} repository. \textbf{Track~I:}
 \texttt{scripts/r2dreamer}, \texttt{configs/r2dreamer}; notebook~01 trains
 (Colab A100, Python~3.11, default \texttt{a100\_vision} preset) and notebook~06
 regenerates results, rollout videos, and the latent analysis.

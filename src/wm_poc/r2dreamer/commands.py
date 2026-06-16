@@ -14,7 +14,7 @@ else:
     _YAML_IMPORT_ERROR = None
 
 
-REPO_DEFAULT = "/content/wm-prediction"
+REPO_DEFAULT = "/content/World_Models_LAS"
 DRIVE_ROOT_DEFAULT = "/content/drive/MyDrive/wm_poc"
 R2_REMOTE_DEFAULT = "https://github.com/NM512/r2dreamer.git"
 

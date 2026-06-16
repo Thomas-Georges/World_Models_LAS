@@ -144,7 +144,7 @@ def run_r2_with_live_display(
         expected = ", ".join(sorted(VALID_RUNS))
         raise ValueError(f"Unknown R2-Dreamer run {run_name!r}; expected one of: {expected}.")
 
-    repo = Path(repo_dir or os.environ.get("WM_POC_REPO", "/content/wm-prediction"))
+    repo = Path(repo_dir or os.environ.get("WM_POC_REPO", "/content/World_Models_LAS"))
     if not repo.is_dir():
         raise FileNotFoundError(f"Repository directory does not exist: {repo}")
 

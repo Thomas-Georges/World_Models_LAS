@@ -76,9 +76,9 @@ train.py.before_wm_poc_checkpoint_patch
 
 ## Manual run order
 
-Open `notebooks/01_r2dreamer_foundation.ipynb` in Colab. Select the preset in the "Select run preset" cell: the default `a100_vision` preset runs the A100 Vision pillar, and `R2_PRESET=t4_proprio` runs the T4 Proprio pillar. The notebook is self-contained: it mounts Drive, defines paths, selects the preset and unique run directories, ensures the runtime repository exists under `/content/wm-prediction`, and then runs the R2-Dreamer setup cells.
+Open `notebooks/01_r2dreamer_foundation.ipynb` in Colab. Select the preset in the "Select run preset" cell: the default `a100_vision` preset runs the A100 Vision pillar, and `R2_PRESET=t4_proprio` runs the T4 Proprio pillar. The notebook is self-contained: it mounts Drive, defines paths, selects the preset and unique run directories, ensures the runtime repository exists under `/content/World_Models_LAS`, and then runs the R2-Dreamer setup cells.
 
-If the repository is private, the clone cell prompts for a GitHub username and personal access token. Use a fine-grained token scoped to this repository with contents read access. The token is only passed to Git for the clone/pull operation and is not written into the notebook.
+The clone cell pulls the public repository over HTTPS; no GitHub credentials are required.
 
 Then run:
 
