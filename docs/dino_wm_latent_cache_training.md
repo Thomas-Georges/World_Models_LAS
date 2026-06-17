@@ -171,6 +171,26 @@ precompute script and the dataset print a warning — random latent reads
 through the Drive FUSE mount would reproduce the original ~16 s/it
 bottleneck.
 
+### torch/torchvision mismatch on Colab
+
+If the smoke or precompute fails at the encoder import with `RuntimeError:
+operator torchvision::nms does not exist`, Colab's preinstalled torch and
+torchvision are out of sync — the legacy DINO-WM pins (`numpy==1.26.4`, old
+`gym`/`d4rl`/`mujoco-py`, etc.) shifted `torch`, leaving its `torchvision`
+compiled against a different build. `scripts/dino_wm/install_colab_deps.py` now
+self-heals this: after the dependency install it imports `torchvision` in a
+subprocess and, if broken, reinstalls the matching release (torch 2.N pairs with
+torchvision 0.(N+15)) with `--no-deps` so `torch` is untouched. Set
+`DINO_TORCHVISION_SPEC=torchvision==<ver>` to override the derived pin for an
+unusual torch build. To repair a runtime by hand without re-running setup:
+
+```python
+import torch, subprocess, sys
+maj, minr = torch.__version__.split("+")[0].split(".")[:2]
+subprocess.run([sys.executable, "-m", "pip", "install", "--no-deps",
+                "--force-reinstall", f"torchvision==0.{int(minr) + 15}.0"], check=True)
+```
+
 ## Checkpoint cadence and crash recovery
 
 A100 time is paid time, so both checkpoint levels are armed by default and

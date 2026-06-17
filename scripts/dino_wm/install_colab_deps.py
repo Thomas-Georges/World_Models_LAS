@@ -210,6 +210,80 @@ def configure_warning_filters() -> None:
     warnings.filterwarnings("ignore", message=r".*sentry_sdk\.Hub is deprecated.*")
 
 
+def _torchvision_spec_for_torch(torch_version: str) -> str | None:
+    """torchvision pin matching a torch version: minor tracks torch (2.N -> 0.(N+15)).
+
+    e.g. torch 2.0 -> torchvision 0.15.0, 2.6 -> 0.21.0, 2.7 -> 0.22.0. Returns
+    None for versions outside the known torch 2.x mapping.
+    """
+    base = torch_version.split("+", 1)[0]
+    parts = base.split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        major, minor = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if major != 2:
+        return None
+    return f"torchvision==0.{minor + 15}.0"
+
+
+def matching_torchvision_spec() -> str | None:
+    """Pin for the torchvision release matching the installed torch.
+
+    Set `DINO_TORCHVISION_SPEC` to override the derived pin (e.g. for an unusual
+    torch build, `DINO_TORCHVISION_SPEC=torchvision==0.21.0+cu124`).
+    """
+    override = os.environ.get("DINO_TORCHVISION_SPEC")
+    if override:
+        return override
+    try:
+        torch_version = importlib.metadata.version("torch")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    return _torchvision_spec_for_torch(torch_version)
+
+
+def ensure_torchvision_matches_torch(
+    *, check_only: bool = False, dry_run: bool = False, quiet: bool = False
+) -> None:
+    """Repair a torch/torchvision mismatch left by the dependency install.
+
+    The legacy pins above can shift Colab's preinstalled torch, leaving its
+    torchvision compiled against a different build (`RuntimeError: operator
+    torchvision::nms does not exist`), which breaks the DINO encoder import in the
+    latent precompute/training. Reinstall the torchvision that matches the
+    installed torch, without touching torch itself.
+    """
+    reason = subprocess_import_failure("torchvision")
+    if reason is None:
+        return
+    spec = matching_torchvision_spec()
+    if spec is None:
+        print(
+            f"WARNING: torchvision fails to import ({reason}) and no matching version "
+            "could be derived from the installed torch. Set DINO_TORCHVISION_SPEC to a "
+            "torchvision matching your torch and rerun.",
+            file=sys.stderr,
+        )
+        return
+    print(f"torch/torchvision mismatch detected ({reason}).")
+    command = [sys.executable, "-m", "pip", "install", "--no-deps", "--force-reinstall"]
+    if quiet:
+        command.append("-q")
+    command.append(spec)
+    print("Repairing torch/torchvision pair:", shlex.join(command))
+    if check_only or dry_run:
+        return
+    subprocess.run(command, check=True)
+    after = subprocess_import_failure("torchvision")
+    if after is None:
+        print(f"torchvision repaired ({spec}).")
+    else:
+        print(f"ERROR: torchvision still fails to import after reinstall: {after}", file=sys.stderr)
+
+
 def main() -> int:
     args = parse_args()
     configure_warning_filters()
@@ -221,6 +295,9 @@ def main() -> int:
     failures = import_failures()
     if not failures:
         print("DINO-WM Python dependencies found.")
+        ensure_torchvision_matches_torch(
+            check_only=args.check_only, dry_run=args.dry_run, quiet=args.quiet
+        )
         return 0
 
     print("Missing or broken DINO-WM Python dependencies:")
@@ -233,8 +310,10 @@ def main() -> int:
     print("$", shlex.join(command))
 
     if args.check_only:
+        ensure_torchvision_matches_torch(check_only=True)
         return 1
     if args.dry_run:
+        ensure_torchvision_matches_torch(dry_run=True)
         return 0
 
     subprocess.run(command, check=True)
@@ -244,6 +323,8 @@ def main() -> int:
         for name, reason in still_failing:
             print(f"  {name}: {reason}", file=sys.stderr)
         return 1
+    # The legacy install above can desync Colab's torch/torchvision pair.
+    ensure_torchvision_matches_torch(quiet=args.quiet)
     print("DINO-WM Python dependencies installed.")
     return 0
 

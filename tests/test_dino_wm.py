@@ -1478,3 +1478,31 @@ def test_dino_wm_run_state_gates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert planning_complete(config)
     (plan_dir / "status_cem.json").write_text(json.dumps({"completed": False, "failed": True}), encoding="utf-8")
     assert not planning_complete(config)
+
+
+def _load_install_colab_deps(name: str):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(name, "scripts/dino_wm/install_colab_deps.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_install_colab_deps_torchvision_spec_for_torch() -> None:
+    # torchvision's minor tracks torch's: torch 2.N pairs with torchvision 0.(N+15),
+    # so the guard reinstalls a matching torchvision after the legacy dep install
+    # desyncs Colab's preinstalled pair (RuntimeError: operator torchvision::nms ...).
+    mod = _load_install_colab_deps("install_colab_deps_script")
+    assert mod._torchvision_spec_for_torch("2.0.1+cu118") == "torchvision==0.15.0"
+    assert mod._torchvision_spec_for_torch("2.6.0+cu124") == "torchvision==0.21.0"
+    assert mod._torchvision_spec_for_torch("2.7.1") == "torchvision==0.22.0"
+    # Versions outside the known torch 2.x mapping yield no pin (caller warns).
+    assert mod._torchvision_spec_for_torch("1.13.1") is None
+    assert mod._torchvision_spec_for_torch("not-a-version") is None
+
+
+def test_install_colab_deps_torchvision_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = _load_install_colab_deps("install_colab_deps_script_override")
+    monkeypatch.setenv("DINO_TORCHVISION_SPEC", "torchvision==0.21.0+cu124")
+    assert mod.matching_torchvision_spec() == "torchvision==0.21.0+cu124"
