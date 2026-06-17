@@ -7,6 +7,7 @@ from wm_poc.r2dreamer.patching import (
     SERIAL_ENV_PATCH_MARKER,
     TRAINER_CHECKPOINT_PATCH_MARKER,
     TRAINER_PROGRESS_PATCH_MARKER,
+    TRAINER_RESUME_PATCH_MARKER,
     patch_dmc_rendering,
     patch_serial_envs,
     patch_train_py,
@@ -130,10 +131,33 @@ def test_patch_train_py_is_idempotent(tmp_path: Path) -> None:
     assert PATCH_MARKER in patched_once
     assert "wm_poc_meta" in patched_once
     assert "finally:" not in patched_once
+    # Mid-run resume: latest.pt is auto-loaded (model + optimizer + step) ahead of
+    # `pretrained`, and the completed run records its final step.
+    assert "_wm_poc_resume_step" in patched_once
+    assert "elif pretrained:" in patched_once
+    assert '"step": int(getattr(policy_trainer, "steps", 0))' in patched_once
     assert (repo / "train.py.before_wm_poc_checkpoint_patch").is_file()
 
     assert patch_train_py(repo) == "already_patched"
     assert train_py.read_text(encoding="utf-8") == patched_once
+    verify_patch(repo)
+
+
+def test_patch_train_py_upgrades_to_resume(tmp_path: Path) -> None:
+    repo = tmp_path / "r2dreamer"
+    repo.mkdir()
+    train_py = repo / "train.py"
+    train_py.write_text(FAKE_TRAIN, encoding="utf-8")
+
+    assert patch_train_py(repo) == "patched"
+    # Simulate a checkout patched before mid-run resume existed.
+    stale = train_py.read_text(encoding="utf-8").replace("_wm_poc_resume_step", "_legacy_removed_")
+    train_py.write_text(stale, encoding="utf-8")
+
+    assert patch_train_py(repo) == "updated_resume_support"
+    upgraded = train_py.read_text(encoding="utf-8")
+    assert "_wm_poc_resume_step" in upgraded
+    assert "elif pretrained:" in upgraded
     verify_patch(repo)
 
 
@@ -179,16 +203,50 @@ def test_patch_trainer_interval_checkpoints_is_idempotent(tmp_path: Path) -> Non
     patched_once = trainer_py.read_text(encoding="utf-8")
     assert TRAINER_CHECKPOINT_PATCH_MARKER in patched_once
     assert TRAINER_PROGRESS_PATCH_MARKER in patched_once
+    assert TRAINER_RESUME_PATCH_MARKER in patched_once
     assert "checkpoint_every" in patched_once
     assert "checkpoint_keep" in patched_once
     assert "progress_every" in patched_once
     assert "_log_progress(step)" in patched_once
     assert '"includes_optimizer": False' in patched_once
     assert "_save_interval_checkpoint(agent, step)" in patched_once
+    # Mid-run resume: a full (model + optimizer) rolling latest.pt is written at
+    # eval boundaries and begin() restarts the loop from the saved step.
+    assert "_save_resume_checkpoint(agent, step)" in patched_once
+    assert '"includes_optimizer": True' in patched_once
+    assert "os.replace(tmp_path" in patched_once
+    assert 'step = getattr(agent, "_wm_poc_resume_step", step)' in patched_once
+    assert patched_once.count('getattr(agent, "_wm_poc_resume_step", step)') == 1
     assert (repo / "trainer.py.before_wm_poc_interval_checkpoint_patch").is_file()
 
     assert patch_trainer_interval_checkpoints(repo) == "already_patched"
     assert trainer_py.read_text(encoding="utf-8") == patched_once
+    verify_trainer_checkpoint_patch(repo)
+
+
+def test_patch_trainer_interval_checkpoints_upgrades_resume(tmp_path: Path) -> None:
+    repo = tmp_path / "r2dreamer"
+    repo.mkdir()
+    trainer_py = repo / "trainer.py"
+    trainer_py.write_text(FAKE_TRAINER, encoding="utf-8")
+
+    assert patch_trainer_interval_checkpoints(repo) == "patched"
+    # Simulate a checkout with the interval + progress patch but no resume support.
+    patched = trainer_py.read_text(encoding="utf-8")
+    start = patched.index("    # BEGIN WM_POC_RESUME_CHECKPOINT")
+    end = patched.index("\n", patched.index("    # END WM_POC_RESUME_CHECKPOINT")) + 1
+    stale = patched[:start] + patched[end:]
+    stale = stale.replace("                self._save_resume_checkpoint(agent, step)\n", "")
+    stale = stale.replace('        step = getattr(agent, "_wm_poc_resume_step", step)\n', "")
+    trainer_py.write_text(stale, encoding="utf-8")
+    assert TRAINER_RESUME_PATCH_MARKER not in stale
+
+    assert patch_trainer_interval_checkpoints(repo) == "updated_resume_checkpoint"
+    upgraded = trainer_py.read_text(encoding="utf-8")
+    assert TRAINER_RESUME_PATCH_MARKER in upgraded
+    assert "_save_resume_checkpoint(agent, step)" in upgraded
+    assert upgraded.count('getattr(agent, "_wm_poc_resume_step", step)') == 1
+    assert upgraded.count(TRAINER_PROGRESS_PATCH_MARKER) == 1
     verify_trainer_checkpoint_patch(repo)
 
 

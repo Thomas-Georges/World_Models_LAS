@@ -12,6 +12,7 @@ DMC_RENDER_PATCH_MARKER = "BEGIN WM_POC_DMC_RENDER_GUARD"
 DMC_RENDER_BACKUP_SUFFIX = ".before_wm_poc_dmc_render_patch"
 TRAINER_CHECKPOINT_PATCH_MARKER = "BEGIN WM_POC_INTERVAL_CHECKPOINTS"
 TRAINER_PROGRESS_PATCH_MARKER = "BEGIN WM_POC_PROGRESS_HEARTBEAT"
+TRAINER_RESUME_PATCH_MARKER = "BEGIN WM_POC_RESUME_CHECKPOINT"
 TRAINER_BACKUP_SUFFIX = ".before_wm_poc_interval_checkpoint_patch"
 SERIAL_ENV_PATCH_MARKER = "BEGIN WM_POC_SERIAL_ENVS"
 SERIAL_ENV_BACKUP_SUFFIX = ".before_wm_poc_serial_env_patch"
@@ -35,8 +36,32 @@ CHECKPOINT_LOADING_BLOCK = """
     pretrained = config.get("pretrained", None)
     pretrained_strict = _wm_poc_bool(config.get("pretrained_strict", True), default=True)
     load_optimizer = _wm_poc_bool(config.get("load_optimizer", False), default=False)
+    resume_enabled = _wm_poc_bool(config.get("resume", True), default=True)
 
-    if pretrained:
+    # Mid-run resume: continue the SAME run from its rolling checkpoint when one
+    # exists. This takes priority over `pretrained` so an interrupted source or
+    # fine-tune run picks up where it stopped (model + optimizer + step) instead
+    # of restarting. Delete logdir/latest.pt (or set +resume=false) to force a
+    # clean restart.
+    agent._wm_poc_resume_step = 0
+    wm_poc_resume_path = pathlib.Path(logdir) / "latest.pt"
+    if resume_enabled and wm_poc_resume_path.is_file():
+        print(f"[wm_poc] Resuming run from {wm_poc_resume_path}")
+        resume_ckpt = torch.load(wm_poc_resume_path, map_location=config.device)
+        if "agent_state_dict" not in resume_ckpt:
+            raise KeyError(
+                f"Resume checkpoint {wm_poc_resume_path} has no 'agent_state_dict'. "
+                f"Available keys: {list(resume_ckpt.keys())}"
+            )
+        agent.load_state_dict(resume_ckpt["agent_state_dict"], strict=False)
+        if "optims_state_dict" in resume_ckpt:
+            tools.recursively_load_optim_state_dict(agent, resume_ckpt["optims_state_dict"])
+            print("[wm_poc] Restored optimizer state for resume.")
+        else:
+            print("[wm_poc] No optimizer state in resume checkpoint; optimizer warm-restarts.")
+        agent._wm_poc_resume_step = int(resume_ckpt.get("wm_poc_meta", {}).get("step", 0))
+        print(f"[wm_poc] Resuming at step {agent._wm_poc_resume_step}.")
+    elif pretrained:
         pretrained_path = pathlib.Path(str(pretrained)).expanduser()
         print(f"[wm_poc] Loading pretrained checkpoint: {pretrained_path}")
         ckpt = torch.load(pretrained_path, map_location=config.device)
@@ -112,6 +137,7 @@ SAVE_REPLACEMENT = """    policy_trainer.begin(agent)
             "pretrained": str(config.get("pretrained", None)),
             "pretrained_strict": pretrained_strict,
             "load_optimizer": load_optimizer,
+            "step": int(getattr(policy_trainer, "steps", 0)),
             "env": str(config.env),
             "model": str(config.model),
             "seed": str(config.seed),
@@ -219,6 +245,38 @@ TRAINER_PROGRESS_METHOD_INSERT = """    # BEGIN WM_POC_PROGRESS_HEARTBEAT
 
 """
 
+TRAINER_RESUME_METHOD_INSERT = """    # BEGIN WM_POC_RESUME_CHECKPOINT
+    def _save_resume_checkpoint(self, agent, step):
+        step = int(step)
+        if self.checkpoint_every <= 0 or step <= 0:
+            return
+        self.logdir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "agent_state_dict": agent.state_dict(),
+            "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
+            "wm_poc_meta": {
+                "kind": "resume",
+                "step": step,
+                "includes_optimizer": True,
+            },
+        }
+        tmp_path = self.logdir / "latest.pt.tmp"
+        torch.save(payload, tmp_path)
+        os.replace(tmp_path, self.logdir / "latest.pt")
+        print(f"[wm_poc] Saved resume checkpoint to {self.logdir / 'latest.pt'} (step {step})", flush=True)
+    # END WM_POC_RESUME_CHECKPOINT
+
+"""
+
+# Resume the same run from its rolling latest.pt: start the loop at the saved
+# step instead of 0. train.py stores the step on the agent before begin().
+TRAINER_RESUME_EVAL_LINE = "                self._save_resume_checkpoint(agent, step)\n"
+TRAINER_RESUME_LOOP_PATTERN = "        while step < self.steps:\n"
+TRAINER_RESUME_LOOP_REPLACEMENT = (
+    '        step = getattr(agent, "_wm_poc_resume_step", step)\n'
+    "        while step < self.steps:\n"
+)
+
 TRAINER_METHOD_INSERT = TRAINER_PROGRESS_METHOD_INSERT + """    # BEGIN WM_POC_INTERVAL_CHECKPOINTS
     def _save_interval_checkpoint(self, agent, step):
         step = int(step)
@@ -254,7 +312,7 @@ TRAINER_METHOD_INSERT = TRAINER_PROGRESS_METHOD_INSERT + """    # BEGIN WM_POC_I
                     pass
     # END WM_POC_INTERVAL_CHECKPOINTS
 
-    def eval(self, agent, train_step):
+""" + TRAINER_RESUME_METHOD_INSERT + """    def eval(self, agent, train_step):
 """
 
 TRAINER_LOOP_PATTERN = """        while step < self.steps:
@@ -271,6 +329,7 @@ TRAINER_EVAL_PATTERN = """            if self._should_eval(step) and self.eval_e
 TRAINER_EVAL_REPLACEMENT = """            if self._should_eval(step) and self.eval_episode_num > 0 and self.eval_envs is not None:
                 self.eval(agent, step)
                 self._save_interval_checkpoint(agent, step)
+                self._save_resume_checkpoint(agent, step)
 """
 
 SERIAL_ENV_IMPORT_ANCHOR = """import atexit
@@ -401,6 +460,7 @@ def patch_train_py(r2_repo: Path) -> str:
         raise FileNotFoundError(f"Missing r2dreamer train.py: {train_py}")
 
     text = train_py.read_text(encoding="utf-8")
+    upgrade = False
     if PATCH_MARKER in text:
         if SAVE_FINALLY_PATTERN in text:
             backup = train_py.with_name(train_py.name + BACKUP_SUFFIX)
@@ -409,7 +469,16 @@ def patch_train_py(r2_repo: Path) -> str:
             text = text.replace(SAVE_FINALLY_PATTERN, SAVE_REPLACEMENT, 1)
             train_py.write_text(text, encoding="utf-8")
             return "updated_save_on_success_only"
-        return "already_patched"
+        if "_wm_poc_resume_step" in text:
+            return "already_patched"
+        # Stale patch predating mid-run resume: re-apply the current patch from
+        # the pristine backup so the resume load/save logic is added.
+        backup = train_py.with_name(train_py.name + BACKUP_SUFFIX)
+        if not backup.is_file():
+            return "already_patched"
+        shutil.copy2(backup, train_py)
+        text = train_py.read_text(encoding="utf-8")
+        upgrade = True
 
     if AGENT_ANCHOR not in text:
         raise RuntimeError("Could not find Dreamer agent creation anchor in train.py.")
@@ -423,7 +492,7 @@ def patch_train_py(r2_repo: Path) -> str:
     text = text.replace(AGENT_ANCHOR, AGENT_ANCHOR + CHECKPOINT_LOADING_BLOCK, 1)
     text = text.replace(SAVE_PATTERN, SAVE_REPLACEMENT, 1)
     train_py.write_text(text, encoding="utf-8")
-    return "patched"
+    return "updated_resume_support" if upgrade else "patched"
 
 
 def patch_dmc_rendering(r2_repo: Path) -> str:
@@ -450,6 +519,31 @@ def patch_dmc_rendering(r2_repo: Path) -> str:
     return "patched"
 
 
+def _insert_trainer_resume(text: str) -> str:
+    """Idempotently add the mid-run resume save/load wiring to a patched trainer.py.
+
+    The fresh patch already gets the resume method and save call from
+    TRAINER_METHOD_INSERT / TRAINER_EVAL_REPLACEMENT, so for that path this only
+    adds the loop start line. For an older patched checkout that predates resume,
+    all three pieces are inserted.
+    """
+    if TRAINER_RESUME_PATCH_MARKER not in text:
+        eval_anchor = "    def eval(self, agent, train_step):\n"
+        if eval_anchor not in text:
+            raise RuntimeError("Could not find trainer.py eval anchor for resume checkpoint.")
+        text = text.replace(eval_anchor, TRAINER_RESUME_METHOD_INSERT + eval_anchor, 1)
+    if TRAINER_RESUME_EVAL_LINE not in text:
+        interval_call = "                self._save_interval_checkpoint(agent, step)\n"
+        if interval_call not in text:
+            raise RuntimeError("Could not find trainer.py interval-save call for resume checkpoint.")
+        text = text.replace(interval_call, interval_call + TRAINER_RESUME_EVAL_LINE, 1)
+    if 'getattr(agent, "_wm_poc_resume_step"' not in text:
+        if TRAINER_RESUME_LOOP_PATTERN not in text:
+            raise RuntimeError("Could not find trainer.py loop anchor for resume checkpoint.")
+        text = text.replace(TRAINER_RESUME_LOOP_PATTERN, TRAINER_RESUME_LOOP_REPLACEMENT, 1)
+    return text
+
+
 def patch_trainer_interval_checkpoints(r2_repo: Path) -> str:
     trainer_py = trainer_py_path(r2_repo)
     if not trainer_py.is_file():
@@ -457,7 +551,9 @@ def patch_trainer_interval_checkpoints(r2_repo: Path) -> str:
 
     text = trainer_py.read_text(encoding="utf-8")
     if TRAINER_CHECKPOINT_PATCH_MARKER in text:
-        if TRAINER_PROGRESS_PATCH_MARKER in text:
+        needs_progress = TRAINER_PROGRESS_PATCH_MARKER not in text
+        needs_resume = TRAINER_RESUME_PATCH_MARKER not in text
+        if not needs_progress and not needs_resume:
             return "already_patched"
 
         backup = trainer_py.with_name(trainer_py.name + TRAINER_BACKUP_SUFFIX)
@@ -465,33 +561,39 @@ def patch_trainer_interval_checkpoints(r2_repo: Path) -> str:
             shutil.copy2(trainer_py, backup)
 
         original = text
-        if "import os\n" not in text:
-            text = text.replace("import pathlib\n", "import os\nimport pathlib\n", 1)
-        if "import time\n" not in text:
-            text = text.replace("import pathlib\n", "import pathlib\nimport time\n", 1)
-        init_anchor = "        self._wm_poc_last_checkpoint_step = 0\n"
-        init_insert = (
-            init_anchor
-            + '        self.progress_every = int(config.get("progress_every", os.environ.get("WM_POC_R2_PROGRESS_EVERY", 100)))\n'
-            + "        self._wm_poc_start_time = time.time()\n"
-            + "        self._wm_poc_last_progress_step = -1\n"
-        )
-        if "self.progress_every" not in text:
-            if init_anchor not in text:
-                raise RuntimeError("Could not find patched trainer init anchor for progress heartbeat.")
-            text = text.replace(init_anchor, init_insert, 1)
-        checkpoint_anchor = "    # BEGIN WM_POC_INTERVAL_CHECKPOINTS\n"
-        if checkpoint_anchor not in text:
-            raise RuntimeError("Could not find trainer.py checkpoint anchor for progress heartbeat.")
-        text = text.replace(checkpoint_anchor, TRAINER_PROGRESS_METHOD_INSERT + checkpoint_anchor, 1)
-        if TRAINER_LOOP_REPLACEMENT not in text:
-            if TRAINER_LOOP_PATTERN not in text:
-                raise RuntimeError("Could not find trainer.py loop anchor for progress heartbeat.")
-            text = text.replace(TRAINER_LOOP_PATTERN, TRAINER_LOOP_REPLACEMENT, 1)
-        if text == original:
-            return "already_patched"
-        trainer_py.write_text(text, encoding="utf-8")
-        return "updated_progress_heartbeat"
+        status = "already_patched"
+        if needs_progress:
+            if "import os\n" not in text:
+                text = text.replace("import pathlib\n", "import os\nimport pathlib\n", 1)
+            if "import time\n" not in text:
+                text = text.replace("import pathlib\n", "import pathlib\nimport time\n", 1)
+            init_anchor = "        self._wm_poc_last_checkpoint_step = 0\n"
+            init_insert = (
+                init_anchor
+                + '        self.progress_every = int(config.get("progress_every", os.environ.get("WM_POC_R2_PROGRESS_EVERY", 100)))\n'
+                + "        self._wm_poc_start_time = time.time()\n"
+                + "        self._wm_poc_last_progress_step = -1\n"
+            )
+            if "self.progress_every" not in text:
+                if init_anchor not in text:
+                    raise RuntimeError("Could not find patched trainer init anchor for progress heartbeat.")
+                text = text.replace(init_anchor, init_insert, 1)
+            checkpoint_anchor = "    # BEGIN WM_POC_INTERVAL_CHECKPOINTS\n"
+            if checkpoint_anchor not in text:
+                raise RuntimeError("Could not find trainer.py checkpoint anchor for progress heartbeat.")
+            text = text.replace(checkpoint_anchor, TRAINER_PROGRESS_METHOD_INSERT + checkpoint_anchor, 1)
+            if TRAINER_LOOP_REPLACEMENT not in text:
+                if TRAINER_LOOP_PATTERN not in text:
+                    raise RuntimeError("Could not find trainer.py loop anchor for progress heartbeat.")
+                text = text.replace(TRAINER_LOOP_PATTERN, TRAINER_LOOP_REPLACEMENT, 1)
+            status = "updated_progress_heartbeat"
+        if needs_resume:
+            text = _insert_trainer_resume(text)
+            if status == "already_patched":
+                status = "updated_resume_checkpoint"
+        if text != original:
+            trainer_py.write_text(text, encoding="utf-8")
+        return status
 
     missing_anchors = [
         name
@@ -519,6 +621,7 @@ def patch_trainer_interval_checkpoints(r2_repo: Path) -> str:
     text = text.replace(TRAINER_METHOD_ANCHOR, TRAINER_METHOD_INSERT, 1)
     text = text.replace(TRAINER_LOOP_PATTERN, TRAINER_LOOP_REPLACEMENT, 1)
     text = text.replace(TRAINER_EVAL_PATTERN, TRAINER_EVAL_REPLACEMENT, 1)
+    text = _insert_trainer_resume(text)
     trainer_py.write_text(text, encoding="utf-8")
     return "patched"
 
@@ -566,7 +669,7 @@ def verify_patch(r2_repo: Path, compile_file: bool = True) -> list[str]:
     if not train_py.is_file():
         raise FileNotFoundError(f"Missing r2dreamer train.py: {train_py}")
     text = train_py.read_text(encoding="utf-8")
-    required = [PATCH_MARKER, "pretrained", "wm_poc_meta", "latest.pt"]
+    required = [PATCH_MARKER, "pretrained", "wm_poc_meta", "latest.pt", "_wm_poc_resume_step"]
     missing = [token for token in required if token not in text]
     if missing:
         raise RuntimeError(f"Patch verification failed; missing tokens: {missing}")
@@ -585,6 +688,7 @@ def verify_trainer_checkpoint_patch(r2_repo: Path, compile_file: bool = True) ->
     required = [
         TRAINER_CHECKPOINT_PATCH_MARKER,
         TRAINER_PROGRESS_PATCH_MARKER,
+        TRAINER_RESUME_PATCH_MARKER,
         "checkpoint_every",
         "checkpoint_keep",
         "progress_every",
@@ -592,6 +696,8 @@ def verify_trainer_checkpoint_patch(r2_repo: Path, compile_file: bool = True) ->
         "checkpoints",
         "includes_optimizer",
         "_save_interval_checkpoint(agent, step)",
+        "_save_resume_checkpoint(agent, step)",
+        'getattr(agent, "_wm_poc_resume_step"',
     ]
     missing = [token for token in required if token not in text]
     if missing:

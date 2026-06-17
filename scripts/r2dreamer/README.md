@@ -89,6 +89,8 @@ Full runs also patch `trainer.py` to save model-only interval checkpoints at eva
 
 Use `R2_CHECKPOINT_KEEP` to control how many interval checkpoints are retained per run. The T4 scaled preset defaults to 8; the balanced A100 vision preset defaults to 6.
 
+At the same eval boundaries the patch also writes a full, resumable `<run>/latest.pt` (model + optimizer + step, written atomically). On startup `train.py` auto-resumes from it, so an interrupted source or fine-tune run continues from where it stopped instead of restarting. Delete `<run>/latest.pt` (or pass `+resume=false`) to force a clean restart. See `docs/r2dreamer_finetune.md` for details.
+
 ## Run presets
 
 | Config | Intended GPU | Obs | Model | Rep loss | Source steps | Target steps | Train ratio | Env workers | Eval eps |

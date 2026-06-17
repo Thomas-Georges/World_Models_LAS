@@ -144,7 +144,24 @@ Those files are written under each run directory:
 /content/drive/MyDrive/wm_poc/logs/r2dreamer/source_base/checkpoints/step_000010000.pt
 ```
 
-They contain `agent_state_dict` and small `wm_poc_meta` only; optimizer state and replay buffers are intentionally omitted. The final successful run still writes `latest.pt` with optimizer state.
+They contain `agent_state_dict` and small `wm_poc_meta` only; optimizer state and replay buffers are intentionally omitted (kept small for Drive). They are used as the fine-tune source and for analysis, not for resuming.
+
+### Mid-run resume (disconnect insurance)
+
+At every evaluation boundary the patch also writes a full, resumable `latest.pt`
+to the run directory containing `agent_state_dict`, `optims_state_dict`, and the
+current `step` (written atomically via a `.tmp` rename so an interrupted write
+never corrupts it). On startup, `train.py` auto-loads `logdir/latest.pt` when it
+exists and continues from the saved step with the optimizer restored — this takes
+priority over `+pretrained=...`, so an interrupted **source** or **fine-tune**
+run picks up where it stopped instead of restarting. A completed run records its
+final step, so re-running it is a no-op.
+
+The replay buffer is not persisted (it can be many GB); after a resume it refills
+from environment interaction while the trained world model and optimizer continue
+from the checkpoint, so almost all of the compute is preserved. To force a clean
+restart, delete `logdir/latest.pt` (the model-only `checkpoints/step_*.pt` snapshots
+do not trigger resume) or pass `+resume=false`.
 
 Useful overrides:
 
@@ -234,4 +251,4 @@ export R2_SERIAL_ENVS=true
 
 Then rerun the patch and command-print cells. The generated command should include `WM_POC_R2_SERIAL_ENVS=true`, and the run should print `[wm_poc] Using serial envs ...` after `Create envs.`. For `dmc_proprio`, `WM_POC_DMC_DISABLE_IMAGE_RENDER=true` remains safe because the model does not use rendered pixels. This worker loss is usually the DMC subprocess dying, not a temporary VSCode or browser disconnect.
 
-Older versions of the WM POC checkpoint patch wrote `latest.pt` in a `finally` block. Rerunning the patch command upgrades existing external checkouts so `latest.pt` is written only after the run succeeds.
+Rerunning the patch command upgrades older external checkouts in place: it adds the mid-run resume support (rolling resumable `latest.pt` + auto-resume on startup) to checkouts patched before that feature existed.
